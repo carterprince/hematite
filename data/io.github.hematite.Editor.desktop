@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Hematite
+Comment=A simple text editor for your vault
+Exec=hematite
+Icon=io.github.hematite.Editor
+Terminal=false
+Categories=GNOME;GTK;Utility;TextEditor;
+StartupNotify=true
+StartupWMClass=io.github.hematite.Editor

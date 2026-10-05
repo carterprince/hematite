@@ -1,0 +1,7 @@
+/target/
+/.hematite-trash-test.*/
+/.aws/
+/.codex/
+/.agents/
+/.env
+/.env.*

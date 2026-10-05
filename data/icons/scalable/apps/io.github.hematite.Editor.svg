@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="128" height="128" viewBox="0 0 128 128">
+  <title>Hematite</title>
+  <desc>A single polished hematite stone with a dark metallic surface and curved silver reflections.</desc>
+  <defs>
+    <path id="stone" d="M 62,12 C 80,7 96,17 104,34 C 112,51 109,70 99,87 C 89,104 72,116 53,115 C 34,114 20,102 19,84 C 17,64 29,40 42,25 C 48,18 55,14 62,12 Z"/>
+    <linearGradient id="edge" x1="20" y1="88" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#36363e"/>
+      <stop offset=".2" stop-color="#111116"/>
+      <stop offset=".56" stop-color="#51515c"/>
+      <stop offset=".78" stop-color="#24242c"/>
+      <stop offset="1" stop-color="#131318"/>
+    </linearGradient>
+    <linearGradient id="body" x1="35" y1="24" x2="87" y2="104" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#777984"/>
+      <stop offset=".29" stop-color="#43444e"/>
+      <stop offset=".6" stop-color="#272730"/>
+      <stop offset="1" stop-color="#16161d"/>
+    </linearGradient>
+    <linearGradient id="left" x1="22" y1="50" x2="48" y2="89" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22232c"/>
+      <stop offset=".65" stop-color="#101017"/>
+      <stop offset="1" stop-color="#3d3e48"/>
+    </linearGradient>
+    <linearGradient id="silver" x1="43" y1="31" x2="97" y2="45" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#c0c5ce"/>
+      <stop offset=".28" stop-color="#f6f8fc"/>
+      <stop offset=".7" stop-color="#e4e9f1"/>
+      <stop offset="1" stop-color="#969eae"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="58" y1="17" x2="105" y2="77" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a9aeb8"/>
+      <stop offset=".4" stop-color="#676b78"/>
+      <stop offset="1" stop-color="#34353e"/>
+    </linearGradient>
+    <linearGradient id="lower" x1="47" y1="98" x2="94" y2="67" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#73717e"/>
+      <stop offset=".48" stop-color="#49434e"/>
+      <stop offset="1" stop-color="#292832"/>
+    </linearGradient>
+  </defs>
+  <!-- A four-unit lower edge gives the same grounded depth as Adwaita icons. -->
+  <use xlink:href="#stone" transform="translate(0 4)" fill="url(#edge)"/>
+  <use xlink:href="#stone" fill="url(#body)"/>
+  <!-- Broad reflections follow the rounded surface rather than crystal facets. -->
+  <path d="M 42,25 C 29,40 17,64 19,84 C 20,102 34,114 53,115 C 40,105 32,91 33,74 C 34,56 42,41 53,31 C 61,23 73,18 85,20 C 77,12 66,10 62,12 C 55,14 48,18 42,25 Z" fill="url(#left)"/>
+  <path d="M 62,15 C 79,10 94,21 101,37 C 109,54 105,73 95,88 C 102,70 105,54 98,39 C 90,24 77,18 62,20 C 54,21 47,25 42,30 C 48,22 54,18 62,15 Z" fill="url(#rim)"/>
+  <path d="M 34,51 C 42,34 53,24 66,23 C 81,22 94,32 99,47 C 91,42 86,38 78,35 C 63,29 49,35 34,51 Z" fill="#22232b"/>
+  <path d="M 35,46 C 44,32 55,26 67,27 C 80,27 92,35 96,44 C 89,40 84,37 76,35 C 61,31 48,36 35,46 Z" fill="url(#silver)"/>
+  <path d="M 39,88 C 51,97 66,98 79,90 C 88,85 95,77 99,66 C 96,82 87,97 74,104 C 60,111 47,103 39,88 Z" fill="url(#lower)"/>
+  <path d="M 33,76 C 31,92 40,107 54,110 C 43,105 37,92 36,80 Z" fill="#8b929f" opacity=".7"/>
+  <path d="M 70,108 C 80,104 88,96 94,86 C 88,99 79,108 68,111 Z" fill="#bac2ce" opacity=".55"/>
+</svg>

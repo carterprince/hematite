@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/io/github/hematite/Editor">
+    <file>icons/scalable/apps/io.github.hematite.Editor.svg</file>
+  </gresource>
+</gresources>
