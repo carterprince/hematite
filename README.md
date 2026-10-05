@@ -47,7 +47,6 @@ cargo run --locked -- --vault /path/to/vault
 
 A desktop launcher template is provided in
 [data/io.github.hematite.Editor.desktop](data/io.github.hematite.Editor.desktop).
-The app icon is embedded in the executable.
 
 ## Sync
 
@@ -80,23 +79,3 @@ works through the lock-based method.
 | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
 | Ctrl+V | Paste text or an image |
 | Ctrl+click / Ctrl+Enter | Open a link while editing its line |
-
-## Tests
-
-```sh
-cargo test --locked
-```
-
-Desktop smoke tests use an isolated temporary vault. Never run them against
-notes you want to keep.
-
-```sh
-scratch=$(mktemp -d)
-mkdir -p "$scratch/folder"
-printf 'Nested fixture\n' > "$scratch/folder/nested note.md"
-printf 'smoke fixture\n' > "$scratch/smoke.md"
-XDG_CONFIG_HOME="$scratch/.config" XDG_DATA_HOME="$scratch/.data" \
-  HEMATITE_SMOKE_TEST=1 HEMATITE_MARKDOWN_SMOKE_TEST=1 \
-  cargo run --locked -- --vault "$scratch"
-rm -rf -- "$scratch"
-```
