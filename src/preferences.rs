@@ -1,48 +1,67 @@
 use super::*;
-use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-#[derive(Deserialize, Serialize)]
-struct Settings {
-    #[serde(default = "default_on")]
-    autosave: bool,
-    #[serde(default = "default_on")]
-    folders_start_expanded: bool,
-    #[serde(default)]
-    sync_external_deletions: bool,
-}
+const SCHEMA_ID: &str = "io.github.hematite.Editor";
 
-fn default_on() -> bool {
-    true
+fn schema() -> gio::SettingsSchema {
+    // Bundle the schema so cargo-run and standalone binaries work without an
+    // installation step. Loading maps it into memory; the temporary copy can
+    // be removed immediately. Settings themselves use the standard backend.
+    let directory =
+        std::env::temp_dir().join(format!("hematite-schema-{}", glib::uuid_string_random()));
+    std::fs::create_dir(&directory).expect("Could not create schema directory");
+    std::fs::write(
+        directory.join("gschemas.compiled"),
+        include_bytes!(concat!(env!("OUT_DIR"), "/schemas/gschemas.compiled")),
+    )
+    .expect("Could not load preferences schema");
+    let result = gio::SettingsSchemaSource::from_directory(
+        &directory,
+        None::<&gio::SettingsSchemaSource>,
+        true,
+    )
+    .expect("Could not load preferences schema")
+    .lookup(SCHEMA_ID, false)
+    .expect("Missing preferences schema");
+    let _ = std::fs::remove_dir_all(directory);
+    result
 }
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            autosave: true,
-            folders_start_expanded: true,
-            sync_external_deletions: false,
-        }
-    }
+thread_local! {
+    static SETTINGS: gio::Settings = gio::Settings::new_full(&schema(), gio::SettingsBackend::NONE, None);
 }
-fn load() -> Settings {
-    std::fs::read(glib::user_config_dir().join("hematite/preferences.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+fn settings() -> gio::Settings {
+    SETTINGS.with(Clone::clone)
 }
 pub(super) fn folders_start_expanded() -> bool {
-    load().folders_start_expanded
+    settings().boolean("folders-start-expanded")
 }
-
 pub(super) fn sync_external_deletions() -> bool {
-    load().sync_external_deletions
+    settings().boolean("sync-external-deletions")
+}
+fn configured_vault() -> Option<PathBuf> {
+    let value = settings().string("vault-directory");
+    if value.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(value.as_str()))
+    }
+}
+pub(super) fn vault_directory() -> PathBuf {
+    configured_vault().unwrap_or_else(|| glib::home_dir().join("Documents/Vault"))
+}
+fn display_directory(path: &std::path::Path) -> String {
+    match path.strip_prefix(glib::home_dir()) {
+        Ok(relative) if relative.as_os_str().is_empty() => "~".to_string(),
+        Ok(relative) => format!("~/{}", relative.to_string_lossy()),
+        Err(_) => path.to_string_lossy().into_owned(),
+    }
 }
 
 struct Preferences {
     editor: Editor,
     enabled: Cell<bool>,
     timer: RefCell<Option<glib::SourceId>>,
-    path: PathBuf,
+    settings: gio::Settings,
 }
 
 impl Preferences {
@@ -75,39 +94,85 @@ impl Preferences {
             .title("Preferences")
             .build();
         let page = adw::PreferencesPage::new();
+        let vault = adw::PreferencesGroup::builder()
+            .title("Vault")
+            .description("Directory changes take effect when you reopen Hematite.")
+            .build();
+        let directory = adw::ActionRow::builder()
+            .title("Vault directory")
+            .subtitle(display_directory(
+                &configured_vault().unwrap_or_else(|| self.editor.root.clone()),
+            ))
+            .build();
+        let choose = gtk::Button::with_label("Choose…");
+        choose.set_valign(gtk::Align::Center);
+        directory.add_suffix(&choose);
+        directory.set_activatable_widget(Some(&choose));
+        choose.connect_clicked({
+            let preferences = self.clone();
+            let directory = directory.clone();
+            move |_| {
+                let preferences = preferences.clone();
+                let directory = directory.clone();
+                glib::spawn_future_local(async move {
+                    let chooser = gtk::FileDialog::builder()
+                        .title("Choose vault directory")
+                        .initial_folder(&gio::File::for_path(
+                            configured_vault().unwrap_or_else(|| preferences.editor.root.clone()),
+                        ))
+                        .build();
+                    match chooser
+                        .select_folder_future(Some(&preferences.editor.window))
+                        .await
+                    {
+                        Ok(folder) => {
+                            let Some(path) = folder.path() else {
+                                preferences.editor.toasts.add_toast(adw::Toast::new(
+                                    "Choose a local directory for the vault.",
+                                ));
+                                return;
+                            };
+                            let result = preferences
+                                .settings
+                                .set_string("vault-directory", &path.to_string_lossy());
+                            if let Err(error) = result {
+                                preferences
+                                    .editor
+                                    .toasts
+                                    .add_toast(adw::Toast::new(&format!(
+                                        "Could not save vault directory: {error}"
+                                    )));
+                                return;
+                            }
+                            directory.set_subtitle(&display_directory(&path));
+                            preferences.editor.toasts.add_toast(adw::Toast::new(
+                                "Vault directory saved. Reopen Hematite to use it.",
+                            ));
+                        }
+                        Err(error)
+                            if error.matches(gtk::DialogError::Dismissed)
+                                || error.matches(gtk::DialogError::Cancelled) => {}
+                        Err(error) => {
+                            preferences
+                                .editor
+                                .toasts
+                                .add_toast(adw::Toast::new(&format!(
+                                    "Could not choose vault directory: {error}"
+                                )))
+                        }
+                    }
+                });
+            }
+        });
+        vault.add(&directory);
+        page.add(&vault);
         let group = adw::PreferencesGroup::builder().title("Editing").build();
         let autosave = adw::SwitchRow::builder()
             .title("Autosave")
             .subtitle("Save notes automatically after you stop typing")
             .active(self.enabled.get())
             .build();
-        autosave.connect_active_notify({
-            let preferences = self.clone();
-            move |row| {
-                let settings = Settings {
-                    autosave: row.is_active(),
-                    folders_start_expanded: folders_start_expanded(),
-                    sync_external_deletions: sync_external_deletions(),
-                };
-                let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-                    std::fs::create_dir_all(preferences.path.parent().unwrap())?;
-                    let temporary = preferences.path.with_extension("json.tmp");
-                    std::fs::write(&temporary, serde_json::to_vec(&settings)?)?;
-                    std::fs::rename(temporary, &preferences.path)?;
-                    Ok(())
-                })();
-                if let Err(error) = result {
-                    preferences
-                        .editor
-                        .toasts
-                        .add_toast(adw::Toast::new(&format!(
-                            "Could not save preferences: {error}"
-                        )));
-                }
-                preferences.enabled.set(settings.autosave);
-                preferences.schedule();
-            }
-        });
+        self.settings.bind("autosave", &autosave, "active").build();
         group.add(&autosave);
         page.add(&group);
         let folders = adw::SwitchRow::builder()
@@ -115,28 +180,9 @@ impl Preferences {
             .subtitle("Expand folders when opening the vault")
             .active(folders_start_expanded())
             .build();
-        folders.connect_active_notify({
-            let preferences = self.clone();
-            move |row| {
-                let mut settings = load();
-                settings.folders_start_expanded = row.is_active();
-                let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-                    std::fs::create_dir_all(preferences.path.parent().unwrap())?;
-                    let temporary = preferences.path.with_extension("json.tmp");
-                    std::fs::write(&temporary, serde_json::to_vec(&settings)?)?;
-                    std::fs::rename(temporary, &preferences.path)?;
-                    Ok(())
-                })();
-                if let Err(error) = result {
-                    preferences
-                        .editor
-                        .toasts
-                        .add_toast(adw::Toast::new(&format!(
-                            "Could not save preferences: {error}"
-                        )));
-                }
-            }
-        });
+        self.settings
+            .bind("folders-start-expanded", &folders, "active")
+            .build();
         let browsing = adw::PreferencesGroup::builder().title("Sidebar").build();
         browsing.add(&folders);
         page.add(&browsing);
@@ -144,28 +190,9 @@ impl Preferences {
             .title("Sync files deleted outside Hematite")
             .subtitle("Remove remote copies when files are deleted in another app. A missing vault is always downloaded again.")
             .active(sync_external_deletions()).build();
-        external.connect_active_notify({
-            let preferences = self.clone();
-            move |row| {
-                let mut settings = load();
-                settings.sync_external_deletions = row.is_active();
-                let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-                    std::fs::create_dir_all(preferences.path.parent().unwrap())?;
-                    let temporary = preferences.path.with_extension("json.tmp");
-                    std::fs::write(&temporary, serde_json::to_vec(&settings)?)?;
-                    std::fs::rename(temporary, &preferences.path)?;
-                    Ok(())
-                })();
-                if let Err(error) = result {
-                    preferences
-                        .editor
-                        .toasts
-                        .add_toast(adw::Toast::new(&format!(
-                            "Could not save preferences: {error}"
-                        )));
-                }
-            }
-        });
+        self.settings
+            .bind("sync-external-deletions", &external, "active")
+            .build();
         let sync = adw::PreferencesGroup::builder().title("Sync").build();
         sync.add(&external);
         page.add(&sync);
@@ -175,16 +202,21 @@ impl Preferences {
 }
 
 pub(super) fn install(editor: &Editor) {
-    let path = glib::user_config_dir().join("hematite/preferences.json");
-    let settings = std::fs::read(&path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Settings>(&bytes).ok())
-        .unwrap_or_default();
+    let settings = settings();
     let preferences = Rc::new(Preferences {
         editor: editor.clone(),
-        enabled: Cell::new(settings.autosave),
+        enabled: Cell::new(settings.boolean("autosave")),
         timer: RefCell::new(None),
-        path,
+        settings,
+    });
+    preferences.settings.connect_changed(Some("autosave"), {
+        let preferences = Rc::downgrade(&preferences);
+        move |settings, _| {
+            if let Some(preferences) = preferences.upgrade() {
+                preferences.enabled.set(settings.boolean("autosave"));
+                preferences.schedule();
+            }
+        }
     });
     editor.buffer.connect_changed({
         let preferences = preferences.clone();
@@ -222,11 +254,7 @@ pub(super) async fn smoke(editor: &Editor) {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), editor.text());
     assert!(!editor.buffer.is_modified());
     row.set_active(false);
-    let settings: Settings = serde_json::from_slice(
-        &std::fs::read(glib::user_config_dir().join("hematite/preferences.json")).unwrap(),
-    )
-    .unwrap();
-    assert!(!settings.autosave);
+    assert!(!settings().boolean("autosave"));
     let saved = editor.text();
     editor.buffer.insert_at_cursor("\nmanual save fixture");
     glib::timeout_future(Duration::from_millis(1300)).await;
@@ -241,15 +269,21 @@ pub(super) async fn smoke(editor: &Editor) {
 mod tests {
     use super::*;
     #[test]
-    fn folders_expand_by_default_including_older_settings() {
-        assert!(Settings::default().folders_start_expanded);
-        assert!(Settings::default().autosave);
-        assert!(!Settings::default().sync_external_deletions);
-        let old: Settings = serde_json::from_str(r#"{"autosave":true}"#).unwrap();
-        assert!(old.autosave && old.folders_start_expanded);
-        let settings: Settings =
-            serde_json::from_str(r#"{"autosave":false,"folders_start_expanded":false}"#).unwrap();
-        assert!(!settings.folders_start_expanded);
-        assert!(!settings.autosave);
+    fn schema_defaults_and_independent_keys() {
+        let schema = schema();
+        let backend = gio::memory_settings_backend_new();
+        let settings = gio::Settings::new_full(&schema, Some(&backend), None);
+        assert!(settings.boolean("autosave"));
+        assert!(settings.boolean("folders-start-expanded"));
+        assert!(!settings.boolean("sync-external-deletions"));
+        assert!(settings.string("vault-directory").is_empty());
+        settings
+            .set_string("vault-directory", "/tmp/chosen-vault")
+            .unwrap();
+        settings.set_boolean("autosave", false).unwrap();
+        let reopened = gio::Settings::new_full(&schema, Some(&backend), None);
+        assert_eq!(reopened.string("vault-directory"), "/tmp/chosen-vault");
+        assert!(!reopened.boolean("autosave"));
+        assert!(reopened.boolean("folders-start-expanded"));
     }
 }

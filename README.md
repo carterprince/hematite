@@ -5,6 +5,9 @@
 # Hematite
 
 A native Markdown editor for Linux, built with Rust, GTK 4, and libadwaita.
+Choose the vault directory in **Options → Preferences**; directory changes apply
+when you reopen Hematite.
+
 Notes are plain files in a vault folder. Hematite opens `~/Documents/Vault`
 by default and creates it if it doesn't exist.
 
@@ -12,7 +15,7 @@ by default and creates it if it doesn't exist.
 
 - **Notes and folders:** create, rename, and organize notes from the sidebar.
   Right-click a note or folder to rename it or move it to Trash.
-  Drag a note onto a folder to move it; drop on **Vault** or empty sidebar space
+  Drag a note onto a folder to move it; drop on empty sidebar space
   to move it back to the root. Relative image and file links are updated.
 - **Search:** find notes by title or content, with matching text previews.
 - **Markdown:** headings, bold, italics, bullets, clickable task checkboxes,
@@ -26,7 +29,7 @@ by default and creates it if it doesn't exist.
 ## Build and run
 
 Requires Rust/Cargo, GTK **4.12+**, libadwaita **1.5+**, `pkg-config`, and
-`glib-compile-resources`. Sync uses `curl`; saving passwords requires
+`glib-compile-resources` and `glib-compile-schemas`. Sync uses `curl`; saving passwords requires
 `secret-tool`.
 
 On Fedora, install the dependencies:
@@ -50,6 +53,8 @@ cargo run --locked -- --vault /path/to/vault
 
 A desktop launcher template is provided in
 [data/io.github.hematite.Editor.desktop](data/io.github.hematite.Editor.desktop).
+
+Preferences are stored in GSettings/dconf under `/io/github/hematite/Editor/`.
 
 ## Sync
 

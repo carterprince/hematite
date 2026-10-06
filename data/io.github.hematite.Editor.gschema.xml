@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="io.github.hematite.Editor" path="/io/github/hematite/Editor/">
+    <key name="autosave" type="b"><default>true</default><summary>Autosave</summary></key>
+    <key name="folders-start-expanded" type="b"><default>true</default><summary>Folders start expanded</summary></key>
+    <key name="sync-external-deletions" type="b"><default>false</default><summary>Sync files deleted outside Hematite</summary></key>
+    <key name="vault-directory" type="s"><default>''</default><summary>Vault directory</summary><description>An empty value uses ~/Documents/Vault. Changes apply on the next launch.</description></key>
+  </schema>
+</schemalist>

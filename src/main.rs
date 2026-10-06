@@ -136,13 +136,10 @@ impl Editor {
                 .path
                 .as_ref()
                 .and_then(|p| p.parent())
-                .and_then(|p| p.strip_prefix(&self.root).ok())
-                .map(|folder| {
-                    if folder.as_os_str().is_empty() {
-                        "~/Vault".to_string()
-                    } else {
-                        format!("~/Vault/{}", folder.to_string_lossy())
-                    }
+                .map(|folder| match folder.strip_prefix(glib::home_dir()) {
+                    Ok(relative) if relative.as_os_str().is_empty() => "~".to_string(),
+                    Ok(relative) => format!("~/{}", relative.to_string_lossy()),
+                    Err(_) => folder.to_string_lossy().into_owned(),
                 })
                 .unwrap_or_else(|| "Select a note to begin".into()),
         );
@@ -166,10 +163,8 @@ impl Editor {
             }
         }
         if document.path.is_some() {
-            self.status.set_text(&format!(
-                "{} words",
-                self.text().split_whitespace().count()
-            ));
+            self.status
+                .set_text(&format!("{} words", self.text().split_whitespace().count()));
         }
     }
 
@@ -494,13 +489,6 @@ fn build(app: &adw::Application, root: PathBuf) {
     let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 0);
     sidebar.add_css_class("vault-sidebar");
     sidebar.set_size_request(230, -1);
-    let heading = gtk::Label::new(Some("Vault"));
-    heading.add_css_class("vault-heading");
-    heading.set_xalign(0.0);
-    heading.set_margin_start(18);
-    heading.set_margin_top(16);
-    heading.set_margin_bottom(4);
-    sidebar.append(&heading);
     let refresh = gtk::Button::from_icon_name("view-refresh-symbolic");
     refresh.set_tooltip_text(Some("Refresh notes"));
     let search = gtk::SearchEntry::new();
@@ -628,7 +616,7 @@ fn build(app: &adw::Application, root: PathBuf) {
     let opened_links = Rc::new(RefCell::new(Vec::<String>::new()));
     images::install(&markdown_view, &editor);
     notes::install(&editor, &new_note, &search, &draft_note, &scroller);
-    moves::install_root(&editor, &scroller, &heading);
+    moves::install_root(&editor, &scroller);
     preferences::install(&editor);
     sync::install(&editor, &options, &sync_status);
     markdown::install(&markdown_view, {
@@ -1229,8 +1217,7 @@ fn build(app: &adw::Application, root: PathBuf) {
 fn main() -> glib::ExitCode {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let root = match args.as_slice() {
-        [] => PathBuf::from(std::env::var_os("HOME").expect("HOME must be set"))
-            .join("Documents/Vault"),
+        [] => preferences::vault_directory(),
         [flag, path] if flag == "--vault" => PathBuf::from(path),
         _ => {
             eprintln!("Usage: hematite [--vault PATH]");
@@ -1240,12 +1227,13 @@ fn main() -> glib::ExitCode {
     if std::env::var_os("HEMATITE_PREFERENCES_SMOKE_TEST").is_some()
         && (std::env::var_os("HEMATITE_MARKDOWN_SMOKE_TEST").is_none()
             || std::env::var_os("HEMATITE_SMOKE_TEST").is_none()
+            || std::env::var("GSETTINGS_BACKEND").as_deref() != Ok("memory")
             || args.is_empty()
             || !std::env::var_os("XDG_CONFIG_HOME")
                 .is_some_and(|path| PathBuf::from(path).starts_with(&root)))
     {
         eprintln!(
-            "Preferences testing requires smoke and Markdown testing, an explicit scratch vault, and isolated XDG_CONFIG_HOME."
+            "Preferences testing requires smoke and Markdown testing, GSETTINGS_BACKEND=memory, an explicit scratch vault, and isolated XDG_CONFIG_HOME."
         );
         return glib::ExitCode::FAILURE;
     }

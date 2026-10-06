@@ -324,9 +324,8 @@ fn drop_target(widget: &impl IsA<gtk::Widget>, editor: &Editor, folder: PathBuf,
     widget.add_controller(target);
 }
 
-pub(super) fn install_root(editor: &Editor, scroller: &gtk::ScrolledWindow, heading: &gtk::Label) {
+pub(super) fn install_root(editor: &Editor, scroller: &gtk::ScrolledWindow) {
     drop_target(scroller, editor, editor.root.clone(), true);
-    drop_target(heading, editor, editor.root.clone(), false);
 }
 
 pub(super) fn install_row(editor: &Editor, row: &gtk::ListBoxRow, path: &Path, folder: bool) {
