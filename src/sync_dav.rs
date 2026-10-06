@@ -346,6 +346,11 @@ impl Dav {
         Ok(())
     }
     pub fn list(&self) -> Result<BTreeMap<String, Remote>, String> {
+        self.list_with_depth(true)
+            .or_else(|_| self.list_with_depth(false))
+    }
+
+    fn list_with_depth(&self, recursive: bool) -> Result<BTreeMap<String, Remote>, String> {
         let mut pending = vec![String::new()];
         let mut seen = std::collections::HashSet::new();
         let mut files = BTreeMap::new();
@@ -357,7 +362,7 @@ impl Dav {
             if !seen.insert(folder.clone()) {
                 continue;
             }
-            let response = self.checked("PROPFIND", &folder, &[("Depth", "1"), ("Content-Type", "application/xml")], Some(b"<d:propfind xmlns:d=\"DAV:\"><d:prop><d:resourcetype/><d:getetag/></d:prop></d:propfind>"))?;
+            let response = self.checked("PROPFIND", &folder, &[("Depth", if recursive { "infinity" } else { "1" }), ("Content-Type", "application/xml")], Some(b"<d:propfind xmlns:d=\"DAV:\"><d:prop><d:resourcetype/><d:getetag/></d:prop></d:propfind>"))?;
             let items = parse_listing(&response.body)?;
             if folder.is_empty() {
                 // A reverse proxy may strip /vault/ without rewriting DAV hrefs.
@@ -423,7 +428,9 @@ impl Dav {
                     continue;
                 }
                 if item.collection {
-                    pending.push(format!("{path}/"));
+                    if !recursive {
+                        pending.push(format!("{path}/"));
+                    }
                 } else {
                     if !item.etag.starts_with('"')
                         || !item.etag.ends_with('"')
@@ -437,7 +444,7 @@ impl Dav {
             if !found_self {
                 return Err("Incomplete WebDAV listing: collection response is missing".into());
             }
-            if files.len() + seen.len() > 100_000 {
+            if files.len() + seen.len() + pending.len() > 100_000 {
                 return Err("Vault exceeds the sync file limit".into());
             }
         }
@@ -549,6 +556,103 @@ fn parse_listing(xml: &[u8]) -> Result<Vec<Item>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recursive_listing_and_depth_one_fallback() {
+        use std::io::Read;
+        use std::net::TcpListener;
+        let root = "<d:response><d:href>/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>";
+        let folder = root.replace("<d:href>/</d:href>", "<d:href>/folder/</d:href>");
+        let file = "<d:response><d:href>/folder/note.md</d:href><d:propstat><d:prop><d:resourcetype/><d:getetag>&quot;v1&quot;</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>";
+        for fallback in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let listings = if fallback {
+                vec![
+                    (403, String::new()),
+                    (207, format!("{root}{folder}")),
+                    (207, format!("{folder}{file}")),
+                ]
+            } else {
+                vec![(207, format!("{root}{folder}{file}"))]
+            };
+            let server = std::thread::spawn(move || {
+                for (index, (status, listing)) in listings.into_iter().enumerate() {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                        .unwrap();
+                    let mut request = Vec::new();
+                    loop {
+                        let mut chunk = [0; 4096];
+                        let read = stream.read(&mut chunk).unwrap();
+                        assert!(read > 0);
+                        request.extend_from_slice(&chunk[..read]);
+                        if let Some(end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                            let headers = String::from_utf8_lossy(&request[..end]).to_lowercase();
+                            let length: usize = headers
+                                .lines()
+                                .find_map(|line| {
+                                    line.strip_prefix("content-length:")
+                                        .map(|value| value.trim().parse().unwrap())
+                                })
+                                .unwrap_or(0);
+                            if request.len() >= end + 4 + length {
+                                break;
+                            }
+                        }
+                    }
+                    let headers = String::from_utf8_lossy(&request).to_lowercase();
+                    assert!(headers.contains(if index == 0 {
+                        "depth: infinity"
+                    } else {
+                        "depth: 1"
+                    }));
+                    let body = format!("<d:multistatus xmlns:d='DAV:'>{listing}</d:multistatus>");
+                    write!(stream, "HTTP/1.1 {status} Response\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                }
+            });
+            let dav = Dav {
+                url: format!("http://{address}/"),
+                username: "test".into(),
+                password: "test".into(),
+                lock_writes: false,
+            };
+            let files = dav.list().unwrap();
+            assert_eq!(files.len(), 1);
+            assert_eq!(files["folder/note.md"].etag, "\"v1\"");
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "Requires an explicitly supplied WebDAV server; read-only comparison"]
+    fn live_recursive_listing_matches_folder_walk() {
+        let dav = Dav {
+            url: std::env::var("HEMATITE_TEST_WEBDAV_URL").unwrap(),
+            username: std::env::var("HEMATITE_TEST_WEBDAV_USER").unwrap(),
+            password: std::env::var("HEMATITE_TEST_WEBDAV_PASSWORD").unwrap(),
+            lock_writes: false,
+        };
+        let start = std::time::Instant::now();
+        let recursive = dav.list_with_depth(true).unwrap();
+        let recursive_time = start.elapsed();
+        let start = std::time::Instant::now();
+        let walk = dav.list_with_depth(false).unwrap();
+        let walk_time = start.elapsed();
+        assert_eq!(
+            recursive.keys().collect::<Vec<_>>(),
+            walk.keys().collect::<Vec<_>>()
+        );
+        for (path, remote) in &recursive {
+            assert_eq!(remote.etag, walk[path].etag);
+        }
+        println!(
+            "Verified {} files: recursive {:.3}s, folder walk {:.3}s",
+            recursive.len(),
+            recursive_time.as_secs_f64(),
+            walk_time.as_secs_f64()
+        );
+    }
     #[test]
     fn paths_and_names() {
         assert_eq!(
