@@ -167,15 +167,7 @@ impl Editor {
         }
         if document.path.is_some() {
             self.status.set_text(&format!(
-                "{} · {} words",
-                document
-                    .path
-                    .as_ref()
-                    .unwrap()
-                    .extension()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_uppercase(),
+                "{} words",
                 self.text().split_whitespace().count()
             ));
         }
@@ -592,7 +584,7 @@ fn build(app: &adw::Application, root: PathBuf) {
         .child(&view)
         .build();
     content.append(&editor_scroll);
-    let status = gtk::Label::new(Some("Markdown · Select a note to begin"));
+    let status = gtk::Label::new(Some("Select a note to begin"));
     status.set_xalign(0.0);
     status.add_css_class("editor-status");
     content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
