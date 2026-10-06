@@ -2,10 +2,33 @@ use super::*;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 struct Settings {
-    #[serde(default)]
+    #[serde(default = "default_on")]
     autosave: bool,
+    #[serde(default = "default_on")]
+    folders_start_expanded: bool,
+}
+
+fn default_on() -> bool {
+    true
+}
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            autosave: true,
+            folders_start_expanded: true,
+        }
+    }
+}
+fn load() -> Settings {
+    std::fs::read(glib::user_config_dir().join("hematite/preferences.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+pub(super) fn folders_start_expanded() -> bool {
+    load().folders_start_expanded
 }
 
 struct Preferences {
@@ -56,6 +79,7 @@ impl Preferences {
             move |row| {
                 let settings = Settings {
                     autosave: row.is_active(),
+                    folders_start_expanded: folders_start_expanded(),
                 };
                 let result = (|| -> Result<(), Box<dyn std::error::Error>> {
                     std::fs::create_dir_all(preferences.path.parent().unwrap())?;
@@ -78,6 +102,36 @@ impl Preferences {
         });
         group.add(&autosave);
         page.add(&group);
+        let folders = adw::SwitchRow::builder()
+            .title("Folders start expanded")
+            .subtitle("Expand folders when opening the vault")
+            .active(folders_start_expanded())
+            .build();
+        folders.connect_active_notify({
+            let preferences = self.clone();
+            move |row| {
+                let mut settings = load();
+                settings.folders_start_expanded = row.is_active();
+                let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                    std::fs::create_dir_all(preferences.path.parent().unwrap())?;
+                    let temporary = preferences.path.with_extension("json.tmp");
+                    std::fs::write(&temporary, serde_json::to_vec(&settings)?)?;
+                    std::fs::rename(temporary, &preferences.path)?;
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    preferences
+                        .editor
+                        .toasts
+                        .add_toast(adw::Toast::new(&format!(
+                            "Could not save preferences: {error}"
+                        )));
+                }
+            }
+        });
+        let browsing = adw::PreferencesGroup::builder().title("Sidebar").build();
+        browsing.add(&folders);
+        page.add(&browsing);
         dialog.add(&page);
         dialog.present(Some(&self.editor.window));
     }
@@ -122,7 +176,8 @@ pub(super) async fn smoke(editor: &Editor) {
     let dialog = editor.window.visible_dialog().unwrap();
     assert!(dialog.is::<adw::PreferencesDialog>());
     let row = switch(dialog.upcast_ref()).unwrap();
-    assert!(!row.is_active());
+    assert!(row.is_active());
+    row.set_active(false);
     row.set_active(true);
     editor.buffer.insert_at_cursor("\nautosave fixture");
     glib::timeout_future(Duration::from_millis(1300)).await;
@@ -143,4 +198,20 @@ pub(super) async fn smoke(editor: &Editor) {
     assert!(editor.save());
     dialog.close();
     println!("Preferences verified: autosave enabled saves; disabled retains unsaved changes.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn folders_expand_by_default_including_older_settings() {
+        assert!(Settings::default().folders_start_expanded);
+        assert!(Settings::default().autosave);
+        let old: Settings = serde_json::from_str(r#"{"autosave":true}"#).unwrap();
+        assert!(old.autosave && old.folders_start_expanded);
+        let settings: Settings =
+            serde_json::from_str(r#"{"autosave":false,"folders_start_expanded":false}"#).unwrap();
+        assert!(!settings.folders_start_expanded);
+        assert!(!settings.autosave);
+    }
 }

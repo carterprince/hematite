@@ -282,7 +282,7 @@ impl Controller {
                         controller.status("dialog-warning-symbolic", &message, true);
                         controller.editor.toasts.add_toast(adw::Toast::new("Sync conflict: both versions have been preserved."));
                     } else if waiting { controller.status("appointment-soon-symbolic", "Remote changes are waiting. Save or discard your edits to continue syncing.", true); }
-                    else { controller.status("emblem-ok-symbolic", "Vault synced", false); }
+                    else { controller.status("object-select-symbolic", "Vault synced", false); }
                 }
                 Ok(Err(error)) => controller.status("dialog-warning-symbolic", &format!("Sync failed. Local saves are safe and pending changes will retry.\n\n{error}"), true),
                 Err(_) => controller.status("dialog-warning-symbolic", "Sync worker failed. Your local files are safe; changes will retry.", true),
@@ -629,7 +629,7 @@ pub(super) async fn smoke(editor: &Editor) {
     );
     assert_eq!(
         controller.icon.icon_name().as_deref(),
-        Some("emblem-ok-symbolic")
+        Some("object-select-symbolic")
     );
     let path = editor.root.join("remote fixture.md");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "Remote fixture\n");
@@ -671,7 +671,7 @@ pub(super) async fn smoke(editor: &Editor) {
     settle(&controller).await;
     assert_eq!(
         controller.icon.icon_name().as_deref(),
-        Some("emblem-ok-symbolic")
+        Some("object-select-symbolic")
     );
     editor.buffer.insert_at_cursor("Unsaved editor text\n");
     let unsaved = editor.text();

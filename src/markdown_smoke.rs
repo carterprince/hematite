@@ -126,11 +126,12 @@ pub(super) async fn run(
     frame().await;
     assert_eq!(editor.text(), SOURCE);
     assert!(!editor.buffer.is_modified());
-    let visible = editor.buffer.text(
-        &editor.buffer.start_iter(),
-        &editor.buffer.end_iter(),
-        false,
-    );
+    let concealed = editor.buffer.tag_table().lookup("md-conceal").unwrap();
+    let visible: String = (0..editor.buffer.char_count())
+        .map(|offset| editor.buffer.iter_at_offset(offset))
+        .filter(|iter| !iter.has_tag(&concealed))
+        .map(|iter| iter.char())
+        .collect();
     assert!(visible.contains("bold and italic with café"));
     assert!(!visible.contains("**bold**"));
     assert!(!visible.contains("- First item"));
@@ -304,10 +305,13 @@ pub(super) async fn run(
         let rect = editor
             .view
             .iter_location(&editor.buffer.iter_at_offset(position));
+        let spacer = editor
+            .view
+            .iter_location(&editor.buffer.iter_at_offset(position + 5));
         let (x, y) = editor.view.buffer_to_window_coords(
             gtk::TextWindowType::Widget,
             rect.x() + 2,
-            rect.y() + 2,
+            spacer.y() + spacer.height() / 2,
         );
         click.emit_by_name::<()>("pressed", &[&1i32, &(x as f64), &(y as f64)]);
         assert!(editor.text().contains(expected));

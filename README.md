@@ -19,7 +19,8 @@ by default and creates it if it doesn't exist.
   links, and tables. Formatting markers appear when you edit a line.
 - **Images:** paste images from the clipboard. They're saved in the vault and
   displayed inside the note, without cluttering the sidebar.
-- **Autosave:** enable it in **Options → Preferences**, or save manually.
+- **Autosave:** on by default; change it in **Options → Preferences**.
+- **Folders:** start expanded by default; change this in Preferences.
 - **WebDAV sync:** keep a local copy of your vault and sync it with a server.
 
 ## Build and run
@@ -58,7 +59,7 @@ or a domain name; Hematite tries the root and then `/vault/`.
 
 - Saves go to disk first, so you can work offline. Pending changes sync when
   the connection returns.
-- Remote files appear in the sidebar as they download.
+- Remote files appear as they download, preserving the server’s modification dates.
 - Hematite checks for changes every 30 seconds and when you return to its window.
 - The bottom-right icon shows progress, success, or a problem. Click it for
   details or to sync now.

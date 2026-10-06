@@ -26,6 +26,7 @@ use std::{
 struct Sidebar {
     entries: Vec<vault::Entry>,
     expanded: HashSet<PathBuf>,
+    seen_folders: HashSet<PathBuf>,
 }
 
 impl Sidebar {
@@ -778,7 +779,16 @@ fn build(app: &adw::Application, root: PathBuf) {
                     indexed
                         .borrow_mut()
                         .retain(|note| live.contains(&note.path));
-                    tree.borrow_mut().entries = entries.clone();
+                    {
+                        let mut state = tree.borrow_mut();
+                        let expand = preferences::folders_start_expanded();
+                        for entry in entries.iter().filter(|entry| entry.directory) {
+                            if state.seen_folders.insert(entry.path.clone()) && expand {
+                                state.expanded.insert(entry.path.clone());
+                            }
+                        }
+                        state.entries = entries.clone();
+                    }
                     for entry in &entries {
                         let path = &entry.path;
                         let row = gtk::ListBoxRow::new();
@@ -1054,6 +1064,13 @@ fn build(app: &adw::Application, root: PathBuf) {
     populate();
 
     if std::env::var_os("HEMATITE_SMOKE_TEST").is_some()
+        && std::env::var_os("HEMATITE_HOVER_SMOKE_TEST").is_some()
+    {
+        glib::MainContext::default().spawn_local(markdown::hover_smoke(editor));
+        return;
+    }
+
+    if std::env::var_os("HEMATITE_SMOKE_TEST").is_some()
         && std::env::var_os("HEMATITE_MOVE_SMOKE_TEST").is_some()
     {
         glib::MainContext::default().spawn_local(moves::smoke(editor));
@@ -1087,6 +1104,9 @@ fn build(app: &adw::Application, root: PathBuf) {
             if let Some(folder_index) = folder_index {
                 let folder = list.row_at_index(folder_index as i32).unwrap();
                 let child = list.row_at_index(folder_index as i32 + 1).unwrap();
+                if child.is_child_visible() {
+                    list.emit_by_name::<()>("row-activated", &[&folder]);
+                }
                 assert!(!child.is_child_visible());
                 list.emit_by_name::<()>("row-activated", &[&folder]);
                 assert!(child.is_child_visible());

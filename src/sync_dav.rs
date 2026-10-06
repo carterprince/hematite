@@ -22,14 +22,49 @@ pub struct Response {
 }
 #[derive(Clone, Debug)]
 pub struct Remote {
+    pub modified: Option<std::time::SystemTime>,
     pub etag: String,
 }
 #[derive(Default)]
 struct Item {
+    modified: String,
     href: String,
     etag: String,
     collection: bool,
     status: Vec<String>,
+}
+
+fn parse_modified(value: &str) -> Option<std::time::SystemTime> {
+    // WebDAV getlastmodified uses the HTTP IMF-fixdate format, in GMT.
+    let parts: Vec<_> = value.split_whitespace().collect();
+    if parts.len() != 6 || parts[5] != "GMT" {
+        return None;
+    }
+    let month = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ]
+    .iter()
+    .position(|m| *m == parts[2])?
+        + 1;
+    let time: Vec<_> = parts[4].split(':').collect();
+    if time.len() != 3 {
+        return None;
+    }
+    let date = glib::DateTime::from_utc(
+        parts[3].parse().ok()?,
+        month as i32,
+        parts[1].parse().ok()?,
+        time[0].parse().ok()?,
+        time[1].parse().ok()?,
+        time[2].parse().ok()?,
+    )
+    .ok()?;
+    let seconds = date.to_unix();
+    if seconds >= 0 {
+        std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_secs(seconds as u64))
+    } else {
+        std::time::UNIX_EPOCH.checked_sub(std::time::Duration::from_secs(seconds.unsigned_abs()))
+    }
 }
 
 pub fn normalize_url(value: &str) -> Result<String, String> {
@@ -362,7 +397,7 @@ impl Dav {
             if !seen.insert(folder.clone()) {
                 continue;
             }
-            let response = self.checked("PROPFIND", &folder, &[("Depth", if recursive { "infinity" } else { "1" }), ("Content-Type", "application/xml")], Some(b"<d:propfind xmlns:d=\"DAV:\"><d:prop><d:resourcetype/><d:getetag/></d:prop></d:propfind>"))?;
+            let response = self.checked("PROPFIND", &folder, &[("Depth", if recursive { "infinity" } else { "1" }), ("Content-Type", "application/xml")], Some(b"<d:propfind xmlns:d=\"DAV:\"><d:prop><d:resourcetype/><d:getetag/><d:getlastmodified/></d:prop></d:propfind>"))?;
             let items = parse_listing(&response.body)?;
             if folder.is_empty() {
                 // A reverse proxy may strip /vault/ without rewriting DAV hrefs.
@@ -438,7 +473,13 @@ impl Dav {
                     {
                         return Err("The server must provide strong ETags for safe syncing".into());
                     }
-                    files.insert(path, Remote { etag: item.etag });
+                    files.insert(
+                        path,
+                        Remote {
+                            modified: parse_modified(&item.modified),
+                            etag: item.etag,
+                        },
+                    );
                 }
             }
             if !found_self {
@@ -501,6 +542,7 @@ fn parse_listing(xml: &[u8]) -> Result<Vec<Item>, String> {
                     match field.as_slice() {
                         b"href" => item.href.push_str(&text),
                         b"getetag" => item.etag.push_str(&text),
+                        b"getlastmodified" => item.modified.push_str(&text),
                         b"status" => item.status.push(text.to_string()),
                         _ => {}
                     }
@@ -556,6 +598,16 @@ fn parse_listing(xml: &[u8]) -> Result<Vec<Item>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reads_remote_modification_dates() {
+        let expected = std::time::UNIX_EPOCH + std::time::Duration::from_secs(784111777);
+        assert_eq!(
+            parse_modified("Sun, 06 Nov 1994 08:49:37 GMT"),
+            Some(expected)
+        );
+        assert_eq!(parse_modified("invalid"), None);
+        assert_eq!(parse_modified("Sun, 99 Nov 1994 08:49:37 GMT"), None);
+    }
     #[test]
     fn recursive_listing_and_depth_one_fallback() {
         use std::io::Read;

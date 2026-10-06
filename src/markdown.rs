@@ -11,6 +11,16 @@ fn local_image_path(directory: &std::path::Path, destination: &str) -> std::path
     directory.join(decoded.as_deref().unwrap_or(destination))
 }
 
+// Concealed markers have a subpixel font. Position overlays vertically from
+// the following normal-sized spacer, while keeping the marker's horizontal origin.
+fn marker_rect(view: &View, offset: i32, spacer: i32) -> gtk::gdk::Rectangle {
+    let buffer = view.buffer();
+    let marker = view.iter_location(&buffer.iter_at_offset(offset));
+    let text =
+        view.iter_location(&buffer.iter_at_offset((offset + spacer).min(buffer.char_count())));
+    gtk::gdk::Rectangle::new(marker.x(), text.y(), marker.width(), text.height())
+}
+
 fn checkbox_layout(view: &View, checked: bool) -> gtk::pango::Layout {
     let layout = view.create_pango_layout(Some(if checked { "☑" } else { "☐" }));
     let attributes = gtk::pango::AttrList::new();
@@ -88,14 +98,14 @@ mod imp {
             let layout = view.create_pango_layout(Some("•"));
             let color = view.color();
             for &offset in self.bullets.borrow().iter() {
-                let rect = view.iter_location(&view.buffer().iter_at_offset(offset));
+                let rect = marker_rect(&view, offset, 1);
                 snapshot.save();
                 snapshot.translate(&gtk::graphene::Point::new(rect.x() as f32, rect.y() as f32));
                 snapshot.append_layout(&layout, &color);
                 snapshot.restore();
             }
             for &(offset, checked) in self.tasks.borrow().iter() {
-                let rect = view.iter_location(&view.buffer().iter_at_offset(offset));
+                let rect = marker_rect(&view, offset, 5);
                 let layout = checkbox_layout(&view, checked);
                 let (_, height) = layout.pixel_size();
                 let y = rect.y() + (rect.height() - height) / 2;
@@ -464,9 +474,7 @@ impl Renderer {
             .iter()
             .copied()
             .find(|(position, checked)| {
-                let rect = self
-                    .view
-                    .iter_location(&self.view.buffer().iter_at_offset(*position));
+                let rect = marker_rect(&self.view, *position, 5);
                 let layout = checkbox_layout(&self.view, *checked);
                 let (width, height) = layout.pixel_size();
                 let top = rect.y() + (rect.height() - height) / 2;
@@ -563,7 +571,13 @@ pub fn install(view: &View, open_link: impl Fn(&str) + 'static) {
             .build(),
         gtk::TextTag::builder()
             .name("md-conceal")
-            .invisible(true)
+            // Keep source characters in GTK's layout index space. Invisible
+            // runs can make GTK 4.22 abort while mapping Pango hit-test offsets
+            // back to the buffer ("byte index off the end of the line").
+            // One Pango unit is subpixel; transparent glyphs still conceal
+            // markers while native cursor/selection mapping remains intact.
+            .size(1)
+            .foreground_rgba(&gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 0.0))
             .build(),
         gtk::TextTag::builder()
             .name("md-bullet-space")
@@ -848,6 +862,9 @@ pub(super) async fn table_smoke(editor: crate::Editor) {
     const SOURCE: &str = "| Claim | Prediction | Observation |\n| :--- | :---: | ---: |\n| A cache reduces repeated network requests | Repeated requests for unchanged documents should finish sooner because the client can reuse previously fetched data | Measurements show shorter response times after the first request, while changed documents are fetched again to keep the cache current. |\n| Offline editing preserves local changes | Documents edited without a connection should remain available and upload when the network returns | Local edits survive restarting the application and are synchronized after the connection is restored |\n| Conflict copies preserve competing edits | Concurrent changes on separate devices should retain both versions instead of silently discarding one | A conflict copy contains the remote version and the original document retains the local version |\n\nAfter the table";
     let path = editor.root.join("table.md");
     std::fs::write(&path, SOURCE).unwrap();
+    if let Some(source) = std::env::var_os("HEMATITE_HOVER_FIXTURE") {
+        std::fs::copy(source, &path).unwrap();
+    }
     editor.open(&path);
     editor.buffer.place_cursor(&editor.buffer.end_iter());
     frame().await;
@@ -912,5 +929,54 @@ pub(super) async fn table_smoke(editor: crate::Editor) {
     println!(
         "Tables verified: wrapped preview, header styling, row click editing, undo, and unchanged saved Markdown."
     );
+    editor.window.close();
+}
+
+pub async fn hover_smoke(editor: crate::Editor) {
+    let path = editor.root.join("hover.md");
+    std::fs::write(
+        &path,
+        "Intro\n\n**1. what is time? implications:**\n\n- First bullet\n- Second bullet\n\nEnd",
+    )
+    .unwrap();
+    if let Some(source) = std::env::var_os("HEMATITE_HOVER_FIXTURE") {
+        std::fs::copy(source, &path).unwrap();
+    }
+    editor.open(&path);
+    editor.buffer.place_cursor(&editor.buffer.end_iter());
+    glib::timeout_future(std::time::Duration::from_millis(500)).await;
+    let view = editor.view.clone().downcast::<View>().unwrap();
+    for &offset in view.imp().bullets.borrow().iter() {
+        let overlay = marker_rect(&view, offset, 1);
+        let text = view.iter_location(&editor.buffer.iter_at_offset(offset + 2));
+        assert_eq!(overlay.y(), text.y(), "Bullet must align with its text");
+        assert_eq!(overlay.height(), text.height());
+    }
+    let controllers = view.observe_controllers();
+    let motion = (0..controllers.n_items())
+        .filter_map(|i| {
+            controllers
+                .item(i)?
+                .downcast::<gtk::EventControllerMotion>()
+                .ok()
+        })
+        .next()
+        .unwrap();
+    for line in 0..editor.buffer.line_count() {
+        let rect = view.iter_location(&editor.buffer.iter_at_line(line).unwrap());
+        for dx in (0..view.width()).step_by(4) {
+            let (x, y) = view.buffer_to_window_coords(
+                gtk::TextWindowType::Widget,
+                dx,
+                rect.y() + rect.height() / 2,
+            );
+            motion.emit_by_name::<()>("motion", &[&(x as f64), &(y as f64)]);
+        }
+    }
+    editor
+        .buffer
+        .place_cursor(&editor.buffer.iter_at_line(2).unwrap());
+    glib::timeout_future(std::time::Duration::from_millis(200)).await;
+    println!("Formatted line hover and cursor placement verified.");
     editor.window.close();
 }

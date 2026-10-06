@@ -16,6 +16,7 @@ pub struct State {
 }
 #[derive(Clone)]
 pub struct Change {
+    pub modified: Option<std::time::SystemTime>,
     pub path: String,
     pub expected: Option<String>,
     pub bytes: Option<Vec<u8>>,
@@ -129,6 +130,7 @@ fn preserve_remote(
     };
     outcome.queue(
         Change {
+            modified: None,
             path: copy.clone(),
             expected: local.get(&copy).map(|bytes| hash(bytes)),
             bytes: Some(bytes.to_vec()),
@@ -202,6 +204,9 @@ pub fn cycle_with_progress(
                     if !local_changed {
                         outcome.queue(
                             Change {
+                                modified: (etag == remote.etag)
+                                    .then_some(remote.modified)
+                                    .flatten(),
                                 path,
                                 expected: local_hash,
                                 bytes: Some(remote_bytes),
@@ -246,6 +251,7 @@ pub fn cycle_with_progress(
             (Some(_), None, Some(base)) if local_hash.as_ref() == Some(&base.hash) => {
                 outcome.queue(
                     Change {
+                        modified: None,
                         path,
                         expected: local_hash,
                         bytes: None,
@@ -273,7 +279,7 @@ pub fn cycle_with_progress(
                 dav.delete(&path, &base.etag)?;
                 outcome.state.files.remove(&path);
             }
-            (None, Some(_), base) => {
+            (None, Some(remote), base) => {
                 let (bytes, etag) = dav.get(&path)?;
                 if base.is_some() {
                     outcome
@@ -282,6 +288,7 @@ pub fn cycle_with_progress(
                 }
                 outcome.queue(
                     Change {
+                        modified: (etag == remote.etag).then_some(remote.modified).flatten(),
                         path,
                         expected: None,
                         record: Some(Record {
@@ -337,6 +344,13 @@ pub fn apply(root: &Path, change: &Change) -> Result<bool, String> {
                 gtk::gio::Cancellable::NONE,
             )
             .map_err(|e| e.to_string())?;
+        if let Some(modified) = change.modified {
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .and_then(|file| file.set_times(std::fs::FileTimes::new().set_modified(modified)))
+                .map_err(|e| format!("Could not preserve modification time: {e}"))?;
+        }
     } else if actual.is_some() {
         use gtk::gio::prelude::*;
         gtk::gio::File::for_path(&path)
@@ -350,11 +364,46 @@ pub fn apply(root: &Path, change: &Change) -> Result<bool, String> {
 mod tests {
     use super::*;
     #[test]
+    fn download_preserves_remote_modification_order() {
+        let root = std::env::temp_dir().join(format!(
+            "hematite-times-{}",
+            gtk::glib::uuid_string_random()
+        ));
+        let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        let new = old + std::time::Duration::from_secs(100);
+        for (name, modified) in [("new.md", new), ("old.md", old)] {
+            assert!(
+                apply(
+                    &root,
+                    &Change {
+                        path: name.into(),
+                        modified: Some(modified),
+                        expected: None,
+                        bytes: Some(b"note".to_vec()),
+                        record: None
+                    }
+                )
+                .unwrap()
+            );
+            assert_eq!(
+                std::fs::metadata(root.join(name))
+                    .unwrap()
+                    .modified()
+                    .unwrap(),
+                modified
+            );
+        }
+        let entries = crate::vault::entries(&root).unwrap();
+        assert_eq!(entries[0].path.file_name().unwrap(), "new.md");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn applying_download_does_not_replace_a_newer_local_save() {
         let root = std::env::temp_dir().join(format!("hematite-sync-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("note.md"), b"new local edit").unwrap();
         let change = Change {
+            modified: None,
             path: "note.md".into(),
             expected: Some(hash(b"old")),
             bytes: Some(b"remote".to_vec()),
@@ -366,6 +415,7 @@ mod tests {
             b"new local edit"
         );
         let malicious = Change {
+            modified: None,
             path: "../outside".into(),
             expected: None,
             bytes: Some(vec![]),
