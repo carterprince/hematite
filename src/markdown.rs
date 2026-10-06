@@ -659,16 +659,17 @@ pub fn install(view: &View, open_link: impl Fn(&str) + 'static) {
     });
     view.add_tick_callback({
         let renderer = renderer.clone();
-        let dimensions = Cell::new((0, None, 0));
+        let dimensions = RefCell::new(None);
         move |view, _| {
             let current = (
                 view.width(),
                 view.screen_width(),
                 view.imp().image_revision.get(),
+                view.pango_context().font_description(),
             );
-            let previous = dimensions.replace(current);
-            if previous != current {
-                if previous.2 != current.2 {
+            let previous = dimensions.replace(Some(current.clone()));
+            if previous.as_ref() != Some(&current) {
+                if previous.as_ref().is_some_and(|previous| previous.2 != current.2) {
                     renderer.textures.borrow_mut().clear();
                 }
                 renderer.refresh(false);

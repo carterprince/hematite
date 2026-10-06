@@ -11,6 +11,7 @@ mod sync_dav;
 mod sync_engine;
 mod trash_smoke;
 mod vault;
+mod zoom;
 use trash_smoke::run as trash_smoke;
 
 use adw::prelude::*;
@@ -618,6 +619,7 @@ fn build(app: &adw::Application, root: PathBuf) {
     notes::install(&editor, &new_note, &search, &draft_note, &scroller);
     moves::install_root(&editor, &scroller);
     preferences::install(&editor);
+    zoom::install(&editor);
     sync::install(&editor, &options, &sync_status);
     markdown::install(&markdown_view, {
         let editor = editor.clone();

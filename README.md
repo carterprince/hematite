@@ -83,6 +83,9 @@ works through the lock-based method.
 | Ctrl+N | New note |
 | Ctrl+F | Search notes |
 | Ctrl+S | Save |
+| Ctrl+plus / Ctrl+minus | Increase / decrease editor text size |
+| Ctrl+scroll | Increase / decrease editor text size |
+| Ctrl+0 | Reset editor text size |
 | Ctrl+B / Ctrl+I | Bold / italic |
 | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
 | Ctrl+V | Paste text or an image |
