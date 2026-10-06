@@ -799,6 +799,21 @@ pub fn install(view: &View, open_link: impl Fn(&str) + 'static) {
     keys.connect_key_pressed({
         let renderer = renderer.clone();
         move |_, key, _, modifiers| {
+            if matches!(key, gtk::gdk::Key::Tab | gtk::gdk::Key::ISO_Left_Tab)
+                && !modifiers.intersects(
+                    gtk::gdk::ModifierType::CONTROL_MASK
+                        | gtk::gdk::ModifierType::ALT_MASK
+                        | gtk::gdk::ModifierType::SUPER_MASK,
+                )
+                && renderer.view.is_editable()
+                && crate::lists::tab(
+                    &renderer.view.buffer(),
+                    key == gtk::gdk::Key::ISO_Left_Tab
+                        || modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK),
+                )
+            {
+                return glib::Propagation::Stop;
+            }
             if matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter)
                 && !modifiers.intersects(
                     gtk::gdk::ModifierType::CONTROL_MASK
