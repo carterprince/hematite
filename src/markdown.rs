@@ -200,7 +200,7 @@ impl View {
 struct Renderer {
     view: View,
     document: RefCell<Document>,
-    tags: [gtk::TextTag; 10],
+    tags: [gtk::TextTag; 11],
     busy: Cell<bool>,
     image_tags: RefCell<Vec<gtk::TextTag>>,
     textures: RefCell<std::collections::HashMap<std::path::PathBuf, Option<gtk::gdk::Texture>>>,
@@ -271,6 +271,7 @@ impl Renderer {
                 &self.tags[match span.style {
                     Style::Bold => 0,
                     Style::Italic => 1,
+                    Style::Strikethrough => 10,
                     Style::Heading(level) => 4 + level as usize,
                 }],
                 span.range.clone(),
@@ -436,6 +437,10 @@ impl Renderer {
                     .is_some_and(|range| range.contains(position))
             })
             .collect();
+        let (bullet_ink, _) = self.view.create_pango_layout(Some("•")).pixel_extents();
+        self.tags[4].set_letter_spacing(
+            (bullet_ink.x() + bullet_ink.width()) * gtk::pango::SCALE,
+        );
         for &position in &bullets {
             if buffer.iter_at_offset(position + 1).char() == ' ' {
                 apply(&self.tags[4], position + 1..position + 2);
@@ -452,6 +457,12 @@ impl Renderer {
                     .is_some_and(|range| range.contains(position))
             })
             .collect();
+        // Reserve the checkbox's actual width in addition to the source space.
+        // Measuring it keeps that gap at one space even when the editor is zoomed.
+        let checkbox_width = checkbox_layout(&self.view, false)
+            .pixel_size().0
+            .max(checkbox_layout(&self.view, true).pixel_size().0);
+        self.tags[9].set_letter_spacing(checkbox_width * gtk::pango::SCALE);
         for &(position, _) in &tasks {
             apply(&self.tags[9], position + 5..position + 6);
         }
@@ -581,7 +592,6 @@ pub fn install(view: &View, open_link: impl Fn(&str) + 'static) {
             .build(),
         gtk::TextTag::builder()
             .name("md-bullet-space")
-            .letter_spacing(10 * gtk::pango::SCALE)
             .build(),
         gtk::TextTag::builder()
             .name("md-heading-1")
@@ -613,7 +623,10 @@ pub fn install(view: &View, open_link: impl Fn(&str) + 'static) {
             .build(),
         gtk::TextTag::builder()
             .name("md-checkbox-space")
-            .letter_spacing(18 * gtk::pango::SCALE)
+            .build(),
+        gtk::TextTag::builder()
+            .name("md-strikethrough")
+            .strikethrough(true)
             .build(),
     ];
     for tag in &tags {
@@ -786,6 +799,18 @@ pub fn install(view: &View, open_link: impl Fn(&str) + 'static) {
     keys.connect_key_pressed({
         let renderer = renderer.clone();
         move |_, key, _, modifiers| {
+            if matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter)
+                && !modifiers.intersects(
+                    gtk::gdk::ModifierType::CONTROL_MASK
+                        | gtk::gdk::ModifierType::SHIFT_MASK
+                        | gtk::gdk::ModifierType::ALT_MASK
+                        | gtk::gdk::ModifierType::SUPER_MASK,
+                )
+                && renderer.view.is_editable()
+                && crate::lists::enter(&renderer.view.buffer())
+            {
+                return glib::Propagation::Stop;
+            }
             if key == gtk::gdk::Key::Return
                 && modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK)
             {

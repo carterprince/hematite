@@ -1,4 +1,5 @@
 mod images;
+mod lists;
 mod markdown;
 mod markdown_smoke;
 mod markdown_syntax;

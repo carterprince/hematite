@@ -5,6 +5,7 @@ use std::ops::Range;
 pub enum Style {
     Bold,
     Italic,
+    Strikethrough,
     Heading(u8),
 }
 
@@ -73,7 +74,7 @@ pub fn parse(text: &str) -> Document {
     let mut link: Option<(Range<usize>, Option<Range<usize>>, String)> = None;
     let mut table: Option<Table> = None;
     let mut cell = false;
-    for (event, range) in Parser::new_ext(text, Options::ENABLE_TABLES).into_offset_iter() {
+    for (event, range) in Parser::new_ext(text, Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH).into_offset_iter() {
         match &event {
             Event::Start(Tag::Table(alignments)) => {
                 table = Some(Table {
@@ -119,6 +120,8 @@ pub fn parse(text: &str) -> Document {
                         Event::End(TagEnd::Strong) => value.push_str("</b>"),
                         Event::Start(Tag::Emphasis) => value.push_str("<i>"),
                         Event::End(TagEnd::Emphasis) => value.push_str("</i>"),
+                        Event::Start(Tag::Strikethrough) => value.push_str("<s>"),
+                        Event::End(TagEnd::Strikethrough) => value.push_str("</s>"),
                         Event::SoftBreak | Event::HardBreak => value.push('\n'),
                         _ => (),
                     }
@@ -130,7 +133,7 @@ pub fn parse(text: &str) -> Document {
             &event,
             Event::Text(_)
                 | Event::Code(_)
-                | Event::Start(Tag::Strong | Tag::Emphasis | Tag::Image { .. })
+                | Event::Start(Tag::Strong | Tag::Emphasis | Tag::Strikethrough | Tag::Image { .. })
         ) {
             if let Some((_, label, _)) = &mut link {
                 if let Some(label) = label {
@@ -164,11 +167,12 @@ pub fn parse(text: &str) -> Document {
                     .push((chars(range.clone()), dest_url.into_string()));
                 protected.push(range);
             }
-            Event::Start(Tag::Strong | Tag::Emphasis) => {
+            Event::Start(Tag::Strong | Tag::Emphasis | Tag::Strikethrough) => {
                 let strong = matches!(event, Event::Start(Tag::Strong));
-                let width = if strong { 2 } else { 1 };
+                let strike = matches!(event, Event::Start(Tag::Strikethrough));
+                let width = if strong || strike { 2 } else { 1 };
                 let source = &text[range.clone()];
-                if source.len() >= width * 2 && (source.starts_with('*') || source.starts_with('_'))
+                if source.len() >= width * 2 && (source.starts_with('*') || source.starts_with('_') || source.starts_with("~~"))
                 {
                     document
                         .markers
@@ -176,7 +180,7 @@ pub fn parse(text: &str) -> Document {
                     document.markers.push(chars(range.end - width..range.end));
                     document.styles.push(Styled {
                         range: chars(range.start + width..range.end - width),
-                        style: if strong { Style::Bold } else { Style::Italic },
+                        style: if strike { Style::Strikethrough } else if strong { Style::Bold } else { Style::Italic },
                     });
                 }
             }

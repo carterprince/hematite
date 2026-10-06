@@ -18,7 +18,7 @@ by default and creates it if it doesn't exist.
   Drag a note onto a folder to move it; drop on empty sidebar space
   to move it back to the root. Relative image and file links are updated.
 - **Search:** find notes by title or content, with matching text previews.
-- **Markdown:** headings, bold, italics, bullets, clickable task checkboxes,
+- **Markdown:** headings, bold, italics, strikethrough, bullets, clickable task checkboxes,
   links, and tables. Formatting markers appear when you edit a line.
 - **Images:** paste images from the clipboard. They're saved in the vault and
   displayed inside the note, without cluttering the sidebar.

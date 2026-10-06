@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn install(editor: &Editor) {
-    let size = Rc::new(Cell::new(15));
+    let size = Rc::new(Cell::new(16));
     let css = gtk::CssProvider::new();
     gtk::style_context_add_provider_for_display(
         &editor.view.display(),
@@ -9,7 +9,7 @@ pub(super) fn install(editor: &Editor) {
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
     );
     let adjust: Rc<dyn Fn(i32)> = Rc::new(move |step| {
-        let next = if step == 0 { 15 } else { (size.get() + step).clamp(8, 48) };
+        let next = if step == 0 { 16 } else { (size.get() + step).clamp(8, 48) };
         size.set(next);
         css.load_from_string(&format!(".editor {{ font-size: {next}px; }}"));
     });
