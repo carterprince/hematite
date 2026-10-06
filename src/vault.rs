@@ -85,12 +85,17 @@ pub fn save(path: &Path, original: &str, text: &str) -> io::Result<()> {
         .map_err(io::Error::other)
 }
 
-pub fn validate_note(root: &Path, path: &Path) -> io::Result<()> {
-    if !fs::symlink_metadata(path)?.is_file()
-        || !path.canonicalize()?.starts_with(root.canonicalize()?)
+pub fn validate_entry(root: &Path, path: &Path) -> io::Result<()> {
+    let root = root.canonicalize()?;
+    let target = path.canonicalize()?;
+    let metadata = fs::symlink_metadata(path)?;
+    if target == root
+        || !target.starts_with(&root)
+        || metadata.file_type().is_symlink()
+        || !(metadata.is_file() || metadata.is_dir())
     {
         return Err(io::Error::other(
-            "Only regular notes inside this vault can be moved to Trash.",
+            "Choose a note or folder inside this vault.",
         ));
     }
     Ok(())
@@ -165,13 +170,14 @@ mod tests {
         assert_eq!(files[0].path, root.join("folder"));
         assert_eq!(files[1].path, root.join("folder/note.md"));
         assert_eq!(files[1].depth, 1);
-        assert!(validate_note(&root, &files[1].path).is_ok());
-        assert!(validate_note(&root, &root.join("folder")).is_err());
-        assert!(validate_note(&root.join("folder"), &root.join("image.png")).is_err());
+        assert!(validate_entry(&root, &files[1].path).is_ok());
+        assert!(validate_entry(&root, &root.join("folder")).is_ok());
+        assert!(validate_entry(&root, &root).is_err());
+        assert!(validate_entry(&root.join("folder"), &root.join("image.png")).is_err());
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(&files[1].path, root.join("link.md")).unwrap();
-            assert!(validate_note(&root, &root.join("link.md")).is_err());
+            assert!(validate_entry(&root, &root.join("link.md")).is_err());
         }
         save(&files[1].path, "original", "edited").unwrap();
         assert!(save(&files[1].path, "original", "stale edit").is_err());

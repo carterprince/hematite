@@ -55,6 +55,90 @@ fn create_folder(parent: &std::path::Path, name: &str) -> std::io::Result<PathBu
     Ok(path)
 }
 
+pub(super) fn reset_draft_parent(editor: &Editor) {
+    let root = editor
+        .list
+        .parent()
+        .unwrap()
+        .downcast::<gtk::Box>()
+        .unwrap();
+    if editor.draft_note.parent().as_ref() != Some(root.upcast_ref()) {
+        if let Some(parent) = editor
+            .draft_note
+            .parent()
+            .and_then(|parent| parent.downcast::<gtk::Box>().ok())
+        {
+            parent.remove(&editor.draft_note);
+            if let Some(row) = parent
+                .parent()
+                .and_then(|widget| widget.downcast::<gtk::ListBoxRow>().ok())
+            {
+                if let Some(header) = parent.first_child() {
+                    parent.remove(&header);
+                    row.set_child(Some(&header));
+                }
+            }
+        }
+        root.prepend(&editor.draft_note);
+    }
+    editor.draft_note.set_margin_start(0);
+}
+
+pub(super) fn position_draft(editor: &Editor) {
+    if !editor.draft_note.is_visible() {
+        return;
+    }
+    let Some(destination) = editor
+        .draft_note
+        .tooltip_text()
+        .map(|path| PathBuf::from(path.as_str()))
+    else {
+        return;
+    };
+    if destination == editor.root {
+        return;
+    }
+    let Ok(relative) = destination.strip_prefix(&editor.root) else {
+        return;
+    };
+    let mut index = 0;
+    while let Some(row) = editor.list.row_at_index(index) {
+        if row.tooltip_text().as_deref() == Some(relative.to_string_lossy().as_ref()) {
+            let Some(child) = row.child() else {
+                return;
+            };
+            let container = if let Ok(container) = child.clone().downcast::<gtk::Box>() {
+                if container.orientation() == gtk::Orientation::Vertical {
+                    container
+                } else {
+                    row.set_child(gtk::Widget::NONE);
+                    let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                    container.append(&child);
+                    row.set_child(Some(&container));
+                    container
+                }
+            } else {
+                return;
+            };
+            if editor.draft_note.parent().as_ref() != Some(container.upcast_ref()) {
+                if let Some(parent) = editor
+                    .draft_note
+                    .parent()
+                    .and_then(|parent| parent.downcast::<gtk::Box>().ok())
+                {
+                    parent.remove(&editor.draft_note);
+                }
+                container.append(&editor.draft_note);
+            }
+            editor
+                .draft_note
+                .set_margin_start(relative.components().count() as i32 * 16);
+            return;
+        }
+        index += 1;
+    }
+}
+
 pub(super) fn install(
     editor: &Editor,
     button: &gtk::Button,
@@ -66,7 +150,12 @@ pub(super) fn install(
     let folder = Rc::new(Cell::new(false));
     draft.connect_visible_notify({
         let editor = editor.clone();
-        move |_| editor.update()
+        move |draft| {
+            if !draft.is_visible() {
+                reset_draft_parent(&editor);
+            }
+            editor.update();
+        }
     });
     let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
     content.add_css_class("note-row");
@@ -215,8 +304,11 @@ pub(super) fn install(
                 let parent = parent.clone();
                 let folder = folder.clone();
                 let icon = icon.clone();
+                let next = editor.clone();
                 editor.confirm(move || {
+                    reset_draft_parent(&next);
                     *parent.borrow_mut() = destination.clone();
+                    draft.set_tooltip_text(Some(&destination.to_string_lossy()));
                     folder.set(name == "new-folder");
                     icon.set_icon_name(Some(if folder.get() {
                         "folder-symbolic"
@@ -238,7 +330,31 @@ pub(super) fn install(
                     search.set_text("");
                     search.emit_by_name::<()>("search-changed", &[]);
                     draft.set_visible(true);
-                    scroller.vadjustment().set_value(0.0);
+                    if destination != next.root {
+                        let relative = destination
+                            .strip_prefix(&next.root)
+                            .unwrap()
+                            .to_string_lossy();
+                        let mut index = 0;
+                        while let Some(row) = next.list.row_at_index(index) {
+                            if row.tooltip_text().as_deref() == Some(relative.as_ref()) {
+                                let icon = row
+                                    .child()
+                                    .and_then(|child| child.first_child())
+                                    .and_then(|widget| widget.downcast::<gtk::Image>().ok());
+                                if icon.is_some_and(|icon| {
+                                    icon.icon_name().as_deref() == Some("pan-end-symbolic")
+                                }) {
+                                    next.list.emit_by_name::<()>("row-activated", &[&row]);
+                                }
+                                break;
+                            }
+                            index += 1;
+                        }
+                        position_draft(&next);
+                    } else {
+                        scroller.vadjustment().set_value(0.0);
+                    }
                     entry.grab_focus();
                     entry.set_position(0);
                 });
@@ -253,9 +369,11 @@ pub(super) fn install(
             let Some(path) = parameter.and_then(|value| value.str()).map(PathBuf::from) else {
                 return;
             };
-            if vault::validate_note(&editor.root, &path).is_err() {
+            if vault::validate_entry(&editor.root, &path).is_err() {
                 return;
             }
+            let folder = path.is_dir();
+            editor.draft_note.set_visible(false);
             let relative = path.strip_prefix(&editor.root).unwrap().to_string_lossy();
             let row = [&editor.list, &editor.results].iter().find_map(|list| {
                 let mut index = 0;
@@ -274,7 +392,15 @@ pub(super) fn install(
             entry.set_text(&path.file_name().unwrap().to_string_lossy());
             row.set_child(Some(&entry));
             entry.grab_focus();
-            let stem = path.file_stem().unwrap().to_string_lossy().chars().count() as i32;
+            let stem = if folder {
+                path.file_name()
+            } else {
+                path.file_stem()
+            }
+            .unwrap()
+            .to_string_lossy()
+            .chars()
+            .count() as i32;
             entry.select_region(0, stem);
             let keys = gtk::EventControllerKey::new();
             keys.connect_key_pressed({
@@ -299,24 +425,32 @@ pub(super) fn install(
                     if name.is_empty()
                         || name.starts_with('.')
                         || name.contains(['/', '\\', '\n', '\r'])
-                        || !matches!(
-                            std::path::Path::new(name)
-                                .extension()
-                                .and_then(|ext| ext.to_str()),
-                            Some("md" | "markdown" | "txt" | "text")
-                        )
+                        || (!folder
+                            && !matches!(
+                                std::path::Path::new(name)
+                                    .extension()
+                                    .and_then(|ext| ext.to_str()),
+                                Some("md" | "markdown" | "txt" | "text")
+                            ))
                     {
                         entry.add_css_class("error");
-                        entry.set_tooltip_text(Some(
-                            "Enter a note filename ending in .md, .markdown, .txt, or .text",
-                        ));
+                        entry.set_tooltip_text(Some(if folder {
+                            "Enter a folder name without slashes"
+                        } else {
+                            "Enter a note filename ending in .md, .markdown, .txt, or .text"
+                        }));
                         return;
                     }
                     let destination = path.parent().unwrap().join(name);
                     if destination != path {
-                        if let Err(error) = vault::validate_note(&editor.root, &path)
+                        if let Err(error) = vault::validate_entry(&editor.root, &path)
                             .map_err(|error| error.to_string())
                             .and_then(|_| {
+                                if std::fs::symlink_metadata(&destination).is_ok() {
+                                    return Err(
+                                        "An item with this name already exists.".to_string()
+                                    );
+                                }
                                 gio::File::for_path(&path)
                                     .move_(
                                         &gio::File::for_path(&destination),
@@ -332,8 +466,20 @@ pub(super) fn install(
                             return;
                         }
                     }
-                    if editor.document.borrow().path.as_ref() == Some(&path) {
-                        editor.document.borrow_mut().path = Some(destination);
+                    let current = editor.document.borrow().path.clone();
+                    if let Some(current) = current.filter(|current| current.starts_with(&path)) {
+                        let moved = if current == path {
+                            destination.clone()
+                        } else {
+                            destination.join(current.strip_prefix(&path).unwrap())
+                        };
+                        editor
+                            .view
+                            .clone()
+                            .downcast::<markdown::View>()
+                            .unwrap()
+                            .set_note_directory(moved.parent().map(std::path::Path::to_path_buf));
+                        editor.document.borrow_mut().path = Some(moved);
                         editor.update();
                     }
                     row.set_child(Some(&original));
@@ -376,4 +522,144 @@ mod tests {
         }
         std::fs::remove_dir_all(root).unwrap();
     }
+}
+
+pub(super) async fn smoke(editor: Editor) {
+    async fn frame() {
+        glib::timeout_future(std::time::Duration::from_millis(200)).await;
+    }
+    let folder = editor.root.join("folder");
+    std::fs::create_dir_all(&folder).unwrap();
+    editor.refresh_button.emit_clicked();
+    frame().await;
+    gtk::prelude::WidgetExt::activate_action(
+        &editor.window,
+        "win.new-note-here",
+        Some(&folder.to_string_lossy().to_string().to_variant()),
+    )
+    .unwrap();
+    frame().await;
+    let entry = editor
+        .draft_note
+        .first_child()
+        .unwrap()
+        .first_child()
+        .unwrap()
+        .last_child()
+        .unwrap()
+        .downcast::<gtk::Entry>()
+        .unwrap();
+    let row = entry.ancestor(gtk::ListBoxRow::static_type()).unwrap();
+    assert_eq!(row.tooltip_text().as_deref(), Some("folder"));
+    assert_eq!(entry.text(), ".md");
+    assert_eq!(entry.position(), 0);
+    entry.set_text("Inside.md");
+    editor.refresh_button.emit_clicked();
+    frame().await;
+    assert_eq!(entry.text(), "Inside.md");
+    assert_eq!(
+        entry
+            .ancestor(gtk::ListBoxRow::static_type())
+            .unwrap()
+            .tooltip_text()
+            .as_deref(),
+        Some("folder")
+    );
+    entry.emit_by_name::<()>("activate", &[]);
+    frame().await;
+    assert!(folder.join("Inside.md").is_file());
+    assert_eq!(
+        editor.document.borrow().path.as_ref(),
+        Some(&folder.join("Inside.md"))
+    );
+    assert!(!editor.draft_note.is_visible());
+    gtk::prelude::WidgetExt::activate_action(&editor.window, "win.new-note", None).unwrap();
+    frame().await;
+    assert!(entry.ancestor(gtk::ListBoxRow::static_type()).is_none());
+    editor.draft_note.set_visible(false);
+    println!(
+        "Folder draft verified: nested placement, caret before extension, refresh preservation, note creation, and root draft restoration."
+    );
+    if std::env::var_os("HEMATITE_FOLDER_OPERATIONS_SMOKE_TEST").is_some() {
+        editor.buffer.insert_at_cursor("Saved after folder rename");
+        gtk::prelude::WidgetExt::activate_action(
+            &editor.window,
+            "win.rename-note",
+            Some(&folder.to_string_lossy().to_string().to_variant()),
+        )
+        .unwrap();
+        frame().await;
+        let focus = gtk::prelude::GtkWindowExt::focus(&editor.window).unwrap();
+        let rename = focus
+            .ancestor(gtk::Entry::static_type())
+            .unwrap()
+            .downcast::<gtk::Entry>()
+            .unwrap();
+        assert_eq!(rename.text(), "folder");
+        std::fs::create_dir(editor.root.join("taken")).unwrap();
+        rename.set_text("taken");
+        rename.emit_by_name::<()>("activate", &[]);
+        assert!(rename.has_css_class("error"));
+        assert!(folder.exists());
+        rename.set_text("Renamed folder");
+        rename.emit_by_name::<()>("activate", &[]);
+        frame().await;
+        let renamed = editor.root.join("Renamed folder");
+        assert!(!folder.exists());
+        assert!(renamed.join("Inside.md").exists());
+        assert_eq!(
+            editor.document.borrow().path.as_ref(),
+            Some(&renamed.join("Inside.md"))
+        );
+        assert_eq!(editor.text(), "Saved after folder rename");
+        assert!(editor.buffer.is_modified());
+        assert!(editor.save());
+        editor
+            .buffer
+            .insert_at_cursor("discard only after trash succeeds");
+        editor.request_trash(renamed.clone());
+        let dialog = editor
+            .window
+            .visible_dialog()
+            .unwrap()
+            .downcast::<adw::AlertDialog>()
+            .unwrap();
+        assert_eq!(dialog.heading().as_deref(), Some("Move folder to Trash?"));
+        assert!(dialog.body().contains("all notes and files"));
+        assert!(dialog.body().contains("unsaved edits"));
+        dialog.emit_by_name::<()>("response", &[&"cancel"]);
+        dialog.close();
+        assert!(renamed.exists());
+        assert!(editor.buffer.is_modified());
+        editor.request_trash(renamed.clone());
+        let dialog = editor
+            .window
+            .visible_dialog()
+            .unwrap()
+            .downcast::<adw::AlertDialog>()
+            .unwrap();
+        dialog.emit_by_name::<()>("response", &[&"trash"]);
+        dialog.close();
+        for _ in 0..30 {
+            frame().await;
+            if !renamed.exists() {
+                break;
+            }
+        }
+        assert!(!renamed.exists());
+        assert!(editor.document.borrow().path.is_none());
+        assert!(!editor.buffer.is_modified());
+        let trash = PathBuf::from(std::env::var_os("XDG_DATA_HOME").unwrap()).join("Trash/files");
+        assert!(
+            std::fs::read_dir(trash).unwrap().any(|entry| entry
+                .unwrap()
+                .path()
+                .join("Inside.md")
+                .exists())
+        );
+        println!(
+            "Folder operations verified: rename without overwriting, preserved unsaved edits, updated note path, trash cancellation, and trashed contents."
+        );
+    }
+    editor.window.close();
 }

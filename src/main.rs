@@ -2,6 +2,7 @@ mod images;
 mod markdown;
 mod markdown_smoke;
 mod markdown_syntax;
+mod moves;
 mod notes;
 mod preferences;
 mod search;
@@ -47,6 +48,13 @@ impl Sidebar {
                 .row_at_index(index as i32)
                 .and_then(|row| row.child())
                 .and_then(|child| child.first_child())
+                .and_then(|child| {
+                    if child.is::<gtk::Image>() {
+                        Some(child)
+                    } else {
+                        child.first_child()
+                    }
+                })
                 .and_then(|child| child.downcast::<gtk::Image>().ok())
             {
                 icon.set_icon_name(Some(if self.expanded.contains(&entry.path) {
@@ -108,10 +116,12 @@ impl Editor {
     fn update(&self) {
         let document = self.document.borrow();
         let dirty = self.buffer.is_modified();
-        let trashing = document
-            .path
-            .as_ref()
-            .is_some_and(|path| self.trash_pending.borrow().contains(path));
+        let trashing = document.path.as_ref().is_some_and(|path| {
+            self.trash_pending
+                .borrow()
+                .iter()
+                .any(|pending| path.starts_with(pending))
+        });
         let name = document
             .path
             .as_ref()
@@ -184,7 +194,12 @@ impl Editor {
         let Some(path) = &document.path else {
             return true;
         };
-        if self.trash_pending.borrow().contains(path) {
+        if self
+            .trash_pending
+            .borrow()
+            .iter()
+            .any(|pending| path.starts_with(pending))
+        {
             return false;
         }
         let text = self.text();
@@ -255,19 +270,31 @@ impl Editor {
     }
 
     fn request_trash(&self, path: PathBuf) {
-        if self.trash_pending.borrow().contains(&path) {
+        if self
+            .trash_pending
+            .borrow()
+            .iter()
+            .any(|pending| path.starts_with(pending))
+        {
             return;
         }
         let relative = path
             .strip_prefix(&self.root)
             .unwrap_or(&path)
             .to_string_lossy();
-        let unsaved =
-            self.document.borrow().path.as_ref() == Some(&path) && self.buffer.is_modified();
+        let folder = path.is_dir();
+        let unsaved = self
+            .document
+            .borrow()
+            .path
+            .as_ref()
+            .is_some_and(|open| open.starts_with(&path))
+            && self.buffer.is_modified();
         let dialog = adw::AlertDialog::builder()
-            .heading("Move note to Trash?")
+            .heading(if folder { "Move folder to Trash?" } else { "Move note to Trash?" })
             .body(format!(
-                "{relative}\n\nYou can restore the saved file from your desktop’s Trash.{}",
+                "{relative}\n\n{}{}",
+                if folder { "This includes all notes and files inside the folder. You can restore them from your desktop’s Trash." } else { "You can restore the saved file from your desktop’s Trash." },
                 if unsaved {
                     "\n\nThis note has unsaved edits. Moving it to Trash will discard those edits."
                 } else {
@@ -282,7 +309,7 @@ impl Editor {
         let editor = self.clone();
         dialog.connect_response(None, move |_, response| {
             if response != "trash" { return; }
-            if let Err(error) = vault::validate_note(&editor.root, &path) {
+            if let Err(error) = vault::validate_entry(&editor.root, &path) {
                 editor.error(&error.to_string());
                 return;
             }
@@ -294,14 +321,14 @@ impl Editor {
                 editor.trash_pending.borrow_mut().remove(&path);
                 match result {
                     Ok(()) => {
-                        if editor.document.borrow().path.as_ref() == Some(&path) {
+                        if editor.document.borrow().path.as_ref().is_some_and(|open| open.starts_with(&path)) {
                             *editor.document.borrow_mut() = Document::default();
                             editor.buffer.begin_irreversible_action();
                             editor.buffer.set_text("Choose a note from the sidebar.");
                             editor.buffer.end_irreversible_action();
                             editor.buffer.set_modified(false);
                             editor.view.set_cursor_visible(false);
-                            editor.status.set_text("Note moved to Trash");
+                            editor.status.set_text(if folder { "Folder moved to Trash" } else { "Note moved to Trash" });
                         }
                         editor.update();
                         editor.refresh_button.emit_clicked();
@@ -389,10 +416,9 @@ fn install_note_menu(
         model.remove_all();
         if path.is_dir() {
             model.append(Some("New note here"), Some("note.new-here"));
-        } else {
-            model.append(Some("Rename"), Some("note.rename"));
-            model.append(Some("Move to Trash"), Some("note.trash"));
         }
+        model.append(Some("Rename"), Some("note.rename"));
+        model.append(Some("Move to Trash"), Some("note.trash"));
     });
     list.insert_action_group("note", Some(&group));
     let gesture = gtk::GestureClick::new();
@@ -608,6 +634,7 @@ fn build(app: &adw::Application, root: PathBuf) {
     let opened_links = Rc::new(RefCell::new(Vec::<String>::new()));
     images::install(&markdown_view, &editor);
     notes::install(&editor, &new_note, &search, &draft_note, &scroller);
+    moves::install_root(&editor, &scroller, &heading);
     preferences::install(&editor);
     sync::install(&editor, &options, &sync_status);
     markdown::install(&markdown_view, {
@@ -695,6 +722,7 @@ fn build(app: &adw::Application, root: PathBuf) {
                     labels.append(&preview);
                 }
                 row.set_child(Some(&labels));
+                moves::install_row(&editor, &row, &hit.path, false);
                 results.append(&row);
             }
             let count = matches.len();
@@ -735,6 +763,7 @@ fn build(app: &adw::Application, root: PathBuf) {
         let generation = generation.clone();
         let update_search = update_search.clone();
         Rc::new(move || {
+            notes::reset_draft_parent(&editor);
             while let Some(row) = list.row_at_index(0) {
                 list.remove(&row);
             }
@@ -780,6 +809,7 @@ fn build(app: &adw::Application, root: PathBuf) {
                             .to_string_lossy();
                         row.set_tooltip_text(Some(&relative));
                         row.set_child(Some(&labels));
+                        moves::install_row(&editor, &row, path, entry.directory);
                         list.append(&row);
                     }
                     if !entries.iter().any(|entry| !entry.directory) {
@@ -788,6 +818,7 @@ fn build(app: &adw::Application, root: PathBuf) {
                             .set_text("No .md or .txt notes found in this vault");
                     }
                     tree.borrow().refresh(&list);
+                    notes::position_draft(&editor);
                     if editor.document.borrow().path.is_some() {
                         editor.update();
                     }
@@ -1023,6 +1054,20 @@ fn build(app: &adw::Application, root: PathBuf) {
     populate();
 
     if std::env::var_os("HEMATITE_SMOKE_TEST").is_some()
+        && std::env::var_os("HEMATITE_MOVE_SMOKE_TEST").is_some()
+    {
+        glib::MainContext::default().spawn_local(moves::smoke(editor));
+        return;
+    }
+
+    if std::env::var_os("HEMATITE_SMOKE_TEST").is_some()
+        && std::env::var_os("HEMATITE_FOLDER_DRAFT_SMOKE_TEST").is_some()
+    {
+        glib::MainContext::default().spawn_local(notes::smoke(editor));
+        return;
+    }
+
+    if std::env::var_os("HEMATITE_SMOKE_TEST").is_some()
         && std::env::var_os("HEMATITE_TABLE_SMOKE_TEST").is_some()
     {
         glib::MainContext::default().spawn_local(markdown::table_smoke(editor));
@@ -1206,7 +1251,8 @@ fn main() -> glib::ExitCode {
         eprintln!("Smoke testing requires --vault pointing to a scratch directory.");
         return glib::ExitCode::FAILURE;
     }
-    if std::env::var_os("HEMATITE_TRASH_SMOKE_TEST").is_some()
+    if (std::env::var_os("HEMATITE_TRASH_SMOKE_TEST").is_some()
+        || std::env::var_os("HEMATITE_FOLDER_OPERATIONS_SMOKE_TEST").is_some())
         && (std::env::var_os("HEMATITE_SMOKE_TEST").is_none()
             || args.is_empty()
             || !std::env::var_os("XDG_DATA_HOME")

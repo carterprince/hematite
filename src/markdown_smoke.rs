@@ -625,7 +625,20 @@ pub(super) async fn run(
         .downcast::<gtk::Entry>()
         .unwrap();
     assert_eq!(note_entry.text(), ".md");
+    let draft_row = note_entry.ancestor(gtk::ListBoxRow::static_type()).unwrap();
+    assert_eq!(draft_row.tooltip_text().as_deref(), Some("Created folder"));
     note_entry.set_text("Inside.md");
+    editor.refresh_button.emit_clicked();
+    frame().await;
+    assert_eq!(note_entry.text(), "Inside.md");
+    assert_eq!(
+        note_entry
+            .ancestor(gtk::ListBoxRow::static_type())
+            .unwrap()
+            .tooltip_text()
+            .as_deref(),
+        Some("Created folder")
+    );
     note_entry.emit_by_name::<()>("activate", &[]);
     frame().await;
     let nested = editor.root.join("Created folder/Inside.md");

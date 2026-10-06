@@ -6,6 +6,11 @@ use std::{
     rc::Rc,
 };
 
+fn local_image_path(directory: &std::path::Path, destination: &str) -> std::path::PathBuf {
+    let decoded = glib::uri_unescape_string(destination, None::<&str>);
+    directory.join(decoded.as_deref().unwrap_or(destination))
+}
+
 fn checkbox_layout(view: &View, checked: bool) -> gtk::pango::Layout {
     let layout = view.create_pango_layout(Some(if checked { "☑" } else { "☐" }));
     let attributes = gtk::pango::AttrList::new();
@@ -225,7 +230,9 @@ impl Renderer {
                             .borrow()
                             .images
                             .iter()
-                            .any(|(_, destination)| directory.join(destination) == *path)
+                            .any(|(_, destination)| {
+                                local_image_path(directory, destination) == *path
+                            })
                     })
             });
         }
@@ -285,13 +292,15 @@ impl Renderer {
                 let mut line_start = start;
                 line_start.set_line_offset(0);
                 let mut line_end = end;
-                line_end.forward_to_line_end();
+                if !line_end.ends_line() {
+                    line_end.forward_to_line_end();
+                }
                 if !buffer.text(&line_start, &start, true).trim().is_empty()
                     || !buffer.text(&end, &line_end, true).trim().is_empty()
                 {
                     continue;
                 }
-                let path = directory.join(destination);
+                let path = local_image_path(directory, destination);
                 let texture = self
                     .textures
                     .borrow_mut()

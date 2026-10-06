@@ -11,7 +11,9 @@ by default and creates it if it doesn't exist.
 ## Features
 
 - **Notes and folders:** create, rename, and organize notes from the sidebar.
-  Right-click a note to rename it or move it to Trash.
+  Right-click a note or folder to rename it or move it to Trash.
+  Drag a note onto a folder to move it; drop on **Vault** or empty sidebar space
+  to move it back to the root. Relative image and file links are updated.
 - **Search:** find notes by title or content, with matching text previews.
 - **Markdown:** headings, bold, italics, bullets, clickable task checkboxes,
   links, and tables. Formatting markers appear when you edit a line.
