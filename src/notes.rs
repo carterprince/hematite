@@ -466,6 +466,9 @@ pub(super) fn install(
                             return;
                         }
                     }
+                    if destination != path {
+                        sync::record_deletion(&editor, &path);
+                    }
                     let current = editor.document.borrow().path.clone();
                     if let Some(current) = current.filter(|current| current.starts_with(&path)) {
                         let moved = if current == path {

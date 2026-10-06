@@ -82,3 +82,8 @@ works through the lock-based method.
 | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
 | Ctrl+V | Paste text or an image |
 | Ctrl+click / Ctrl+Enter | Open a link while editing its line |
+
+Files moved to Trash inside Hematite are deleted remotely during sync. Files
+removed in another app are downloaded again unless **Sync files deleted outside
+Hematite** is enabled in Preferences (off by default). Removing the entire vault
+folder always triggers a fresh download, regardless of that setting.

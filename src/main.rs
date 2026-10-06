@@ -322,6 +322,7 @@ impl Editor {
                 editor.trash_pending.borrow_mut().remove(&path);
                 match result {
                     Ok(()) => {
+                        sync::record_deletion(&editor, &path);
                         if editor.document.borrow().path.as_ref().is_some_and(|open| open.starts_with(&path)) {
                             *editor.document.borrow_mut() = Document::default();
                             editor.buffer.begin_irreversible_action();
@@ -767,6 +768,9 @@ fn build(app: &adw::Application, root: PathBuf) {
             notes::reset_draft_parent(&editor);
             while let Some(row) = list.row_at_index(0) {
                 list.remove(&row);
+            }
+            if !editor.root.is_dir() {
+                sync::vault_missing(&editor);
             }
             match std::fs::create_dir_all(&editor.root).and_then(|()| vault::entries(&editor.root))
             {

@@ -12,6 +12,8 @@ pub struct Record {
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct State {
+    #[serde(default)]
+    pub deletions: BTreeSet<String>,
     pub files: BTreeMap<String, Record>,
 }
 #[derive(Clone)]
@@ -150,12 +152,29 @@ pub fn cycle(dav: &Dav, local: BTreeMap<String, Vec<u8>>, state: State) -> Resul
     cycle_with_progress(dav, local, state, |_| false)
 }
 
+#[cfg(test)]
 pub fn cycle_with_progress(
     dav: &Dav,
     local: BTreeMap<String, Vec<u8>>,
     state: State,
+    progress: impl FnMut(&Change) -> bool,
+) -> Result<Outcome, String> {
+    cycle_with_policy(dav, local, state, false, false, progress)
+}
+
+pub fn cycle_with_policy(
+    dav: &Dav,
+    local: BTreeMap<String, Vec<u8>>,
+    state: State,
+    sync_external_deletions: bool,
+    missing_vault: bool,
     mut progress: impl FnMut(&Change) -> bool,
 ) -> Result<Outcome, String> {
+    let state = if missing_vault {
+        State::default()
+    } else {
+        state
+    };
     let remote = dav.list()?; // Never infer deletion from a failed/partial listing.
     let mut paths: Vec<_> = local
         .keys()
@@ -179,6 +198,7 @@ pub fn cycle_with_progress(
         let remote_file = remote.get(&path);
         let base = outcome.state.files.get(&path).cloned();
         let local_hash = bytes.map(|bytes| hash(bytes));
+        let finished_path = path.clone();
         match (bytes, remote_file, base) {
             (Some(bytes), Some(remote), base) => {
                 let local_changed = base
@@ -275,13 +295,24 @@ pub fn cycle_with_progress(
                     },
                 );
             }
-            (None, Some(remote), Some(base)) if base.etag == remote.etag => {
+            (None, Some(remote), Some(base))
+                if base.etag == remote.etag
+                    && (sync_external_deletions
+                        || outcome.state.deletions.iter().any(|deleted| {
+                            path == *deleted || path.starts_with(&format!("{deleted}/"))
+                        })) =>
+            {
                 dav.delete(&path, &base.etag)?;
                 outcome.state.files.remove(&path);
             }
             (None, Some(remote), base) => {
                 let (bytes, etag) = dav.get(&path)?;
-                if base.is_some() {
+                if base.is_some()
+                    && (sync_external_deletions
+                        || outcome.state.deletions.iter().any(|deleted| {
+                            path == *deleted || path.starts_with(&format!("{deleted}/"))
+                        }))
+                {
                     outcome
                         .conflicts
                         .push(format!("{path} (remote edit kept after local deletion)"));
@@ -304,7 +335,9 @@ pub fn cycle_with_progress(
                 outcome.state.files.remove(&path);
             }
         }
+        outcome.state.deletions.remove(&finished_path);
     }
+    outcome.state.deletions.clear();
     Ok(outcome)
 }
 
@@ -363,6 +396,98 @@ pub fn apply(root: &Path, change: &Change) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn deletion_policy_respects_external_setting_explicit_trash_and_missing_vault() {
+        use std::io::{Read, Write};
+        for (external, explicit, missing, changed) in [
+            (false, false, false, false),
+            (true, false, false, false),
+            (false, true, false, false),
+            (true, false, true, false),
+            (false, true, true, false),
+            (false, false, false, true),
+            (true, false, false, true),
+            (false, true, false, true),
+        ] {
+            let delete = (external || explicit) && !missing && !changed;
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                for expected in ["PROPFIND", if delete { "DELETE" } else { "GET" }] {
+                    let (mut socket, _) = listener.accept().unwrap();
+                    socket
+                        .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                        .unwrap();
+                    let mut request = Vec::new();
+                    loop {
+                        let mut buf = [0; 4096];
+                        let n = socket.read(&mut buf).unwrap();
+                        assert!(n > 0);
+                        request.extend_from_slice(&buf[..n]);
+                        if request.windows(4).any(|v| v == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    assert!(
+                        String::from_utf8_lossy(&request).starts_with(expected),
+                        "Wrong request for deletion policy"
+                    );
+                    let (status, body) = if expected == "PROPFIND" {
+                        (
+                            207,
+                            r#"<d:multistatus xmlns:d="DAV:"><d:response><d:href>/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response><d:response><d:href>/note.md</d:href><d:propstat><d:prop><d:resourcetype/><d:getetag>&quot;v1&quot;</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>"#,
+                        )
+                    } else if expected == "DELETE" {
+                        (204, "")
+                    } else {
+                        (200, "remote note")
+                    };
+                    write!(socket, "HTTP/1.1 {status} OK\r\nETag: \"v1\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                }
+            });
+            let mut state = State::default();
+            state.files.insert(
+                "note.md".into(),
+                Record {
+                    hash: hash(b"remote note"),
+                    etag: "\"v1\"".into(),
+                },
+            );
+            if explicit {
+                state.deletions.insert("note.md".into());
+            }
+            if changed {
+                state.files.get_mut("note.md").unwrap().etag = "\"old\"".into();
+            }
+            let dav = Dav {
+                url: format!("http://{address}/"),
+                username: String::new(),
+                password: String::new(),
+                lock_writes: false,
+            };
+            let serialized = serde_json::to_vec(&state).unwrap();
+            let state = serde_json::from_slice(&serialized).unwrap(); // Restart with persisted intent.
+            let outcome =
+                cycle_with_policy(&dav, BTreeMap::new(), state, external, missing, |_| false)
+                    .unwrap();
+            assert_eq!(
+                !outcome.conflicts.is_empty(),
+                changed && (external || explicit) && !missing
+            );
+            assert!(outcome.state.deletions.is_empty());
+            if delete {
+                assert!(outcome.changes.is_empty());
+                assert!(!outcome.state.files.contains_key("note.md"));
+            } else {
+                assert_eq!(outcome.changes.len(), 1);
+                assert_eq!(
+                    outcome.changes[0].bytes.as_deref(),
+                    Some(b"remote note".as_slice())
+                );
+            }
+            server.join().unwrap();
+        }
+    }
     #[test]
     fn download_preserves_remote_modification_order() {
         let root = std::env::temp_dir().join(format!(

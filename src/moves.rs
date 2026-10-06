@@ -270,6 +270,7 @@ pub(super) fn move_note(editor: &Editor, path: &Path, folder: &Path) -> Result<(
             index += 1;
         }
     }
+    sync::record_deletion(editor, path);
     sync::request(editor);
     Ok(())
 }

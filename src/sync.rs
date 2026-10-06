@@ -34,6 +34,7 @@ pub struct Controller {
     generation: Cell<u64>,
     detail: RefCell<String>,
     directory: PathBuf,
+    fresh_checkout: Cell<bool>,
 }
 fn data_directory(root: &Path) -> PathBuf {
     let base = std::env::var_os("XDG_DATA_HOME")
@@ -105,6 +106,13 @@ fn keyring(profile: &Profile, root: &Path, password: Option<&str>) -> Result<Str
 impl Controller {
     fn receive_download(&self, change: &sync_engine::Change) -> bool {
         let path = self.editor.root.join(&change.path);
+        if self.session.borrow().as_ref().is_some_and(|session| {
+            session.state.deletions.iter().any(|deleted| {
+                change.path == *deleted || change.path.starts_with(&format!("{deleted}/"))
+            })
+        }) {
+            return false;
+        }
         let current = self.editor.document.borrow().path.as_ref() == Some(&path);
         if current && self.editor.buffer.is_modified() {
             return false;
@@ -194,6 +202,9 @@ impl Controller {
         }
         self.busy("Syncing vault…");
         let session = self.session.borrow().as_ref().unwrap().clone();
+        let initial_deletions = session.state.deletions.clone();
+        let sync_external = crate::preferences::sync_external_deletions();
+        let fresh_checkout = self.fresh_checkout.get() || !self.editor.root.is_dir();
         let root = self.editor.root.clone();
         let generation = self.generation.get();
         let controller = self.clone();
@@ -216,14 +227,22 @@ impl Controller {
         });
         glib::spawn_future_local(async move {
             let work = gio::spawn_blocking(move || {
+                let missing_vault = fresh_checkout || !root.is_dir();
                 let local = sync_engine::snapshot(&root)?;
-                sync_engine::cycle_with_progress(&session.dav, local, session.state, |change| {
-                    let (accepted, result) = std::sync::mpsc::channel();
-                    if downloads.send((change.clone(), accepted)).is_err() {
-                        return false;
-                    }
-                    result.recv().unwrap_or(false)
-                })
+                sync_engine::cycle_with_policy(
+                    &session.dav,
+                    local,
+                    session.state,
+                    sync_external,
+                    missing_vault,
+                    |change| {
+                        let (accepted, result) = std::sync::mpsc::channel();
+                        if downloads.send((change.clone(), accepted)).is_err() {
+                            return false;
+                        }
+                        result.recv().unwrap_or(false)
+                    },
+                )
             })
             .await;
             progress.remove();
@@ -237,9 +256,13 @@ impl Controller {
             match work {
                 Ok(Ok(mut outcome)) => {
                     let mut waiting = false; let mut changed = false; let mut current_changed = false; let mut errors = Vec::new();
+                    controller.fresh_checkout.set(false);
+                    let pending_deletions: std::collections::BTreeSet<_> = controller.session.borrow().as_ref().map(|session| session.state.deletions.difference(&initial_deletions).cloned().collect()).unwrap_or_default();
+                    outcome.state.deletions.extend(pending_deletions.iter().cloned());
                     let current = controller.editor.document.borrow().path.clone();
                     for change in outcome.changes {
                         let path = controller.editor.root.join(&change.path);
+                        if pending_deletions.iter().any(|deleted| change.path == *deleted || change.path.starts_with(&format!("{deleted}/"))) { waiting = true; continue; }
                         if current.as_ref() == Some(&path) && controller.editor.buffer.is_modified() {
                             waiting = true; continue;
                         }
@@ -390,6 +413,65 @@ impl Controller {
     }
 }
 
+// Record only operations performed inside Hematite; persists through offline
+// periods/restarts and also covers the old paths of renames and moves.
+pub fn vault_missing(editor: &Editor) {
+    if let Some(controller) = editor.sync.borrow().as_ref() {
+        controller.fresh_checkout.set(true);
+        controller.generation.set(controller.generation.get() + 1);
+        if controller.running.get() {
+            controller.again.set(true);
+        }
+        // Reset on disk before the sidebar recreates the directory. Otherwise
+        // a restart after an interrupted download could reuse deletion history.
+        let state = State::default();
+        if let Some(session) = controller.session.borrow_mut().as_mut() {
+            session.state = state.clone();
+        }
+        if controller.directory.exists() {
+            if let Err(error) = write_json(&controller.directory.join("state.json"), &state) {
+                editor.toasts.add_toast(adw::Toast::new(&format!(
+                    "Could not reset missing-vault sync history: {error}"
+                )));
+            }
+        }
+    }
+}
+
+pub fn record_deletion(editor: &Editor, path: &Path) {
+    let Some(controller) = editor.sync.borrow().clone() else {
+        return;
+    };
+    let relative = match path.strip_prefix(&editor.root) {
+        Ok(path) => path
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/"),
+        Err(_) => return,
+    };
+    let mut state = controller
+        .session
+        .borrow()
+        .as_ref()
+        .map(|session| session.state.clone())
+        .unwrap_or_else(|| state_from(&controller.directory).unwrap_or_default());
+    let paths: Vec<_> = state
+        .files
+        .keys()
+        .filter(|name| *name == &relative || name.starts_with(&format!("{relative}/")))
+        .cloned()
+        .collect();
+    state.deletions.extend(paths);
+    state.deletions.insert(relative);
+    if let Err(error) = write_json(&controller.directory.join("state.json"), &state) {
+        editor.toasts.add_toast(adw::Toast::new(&format!(
+            "Could not remember deletion for sync: {error}"
+        )));
+    }
+    if let Some(session) = controller.session.borrow_mut().as_mut() {
+        session.state = state;
+    }
+}
+
 pub fn request(editor: &Editor) {
     if let Some(controller) = editor.sync.borrow().as_ref() {
         controller.request();
@@ -415,9 +497,13 @@ pub fn install(editor: &Editor, menu_button: &gtk::MenuButton, status_button: &g
         generation: Cell::new(0),
         detail: RefCell::default(),
         directory: data_directory(&editor.root),
+        fresh_checkout: Cell::new(!editor.root.is_dir()),
     });
     controller.status("network-offline-symbolic", "WebDAV is not connected", false);
     *editor.sync.borrow_mut() = Some(controller.clone());
+    if !editor.root.is_dir() {
+        vault_missing(editor);
+    }
     status_button.connect_clicked({
         let controller = controller.clone();
         move |_| {

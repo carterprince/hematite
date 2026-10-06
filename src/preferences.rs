@@ -8,6 +8,8 @@ struct Settings {
     autosave: bool,
     #[serde(default = "default_on")]
     folders_start_expanded: bool,
+    #[serde(default)]
+    sync_external_deletions: bool,
 }
 
 fn default_on() -> bool {
@@ -18,6 +20,7 @@ impl Default for Settings {
         Self {
             autosave: true,
             folders_start_expanded: true,
+            sync_external_deletions: false,
         }
     }
 }
@@ -29,6 +32,10 @@ fn load() -> Settings {
 }
 pub(super) fn folders_start_expanded() -> bool {
     load().folders_start_expanded
+}
+
+pub(super) fn sync_external_deletions() -> bool {
+    load().sync_external_deletions
 }
 
 struct Preferences {
@@ -80,6 +87,7 @@ impl Preferences {
                 let settings = Settings {
                     autosave: row.is_active(),
                     folders_start_expanded: folders_start_expanded(),
+                    sync_external_deletions: sync_external_deletions(),
                 };
                 let result = (|| -> Result<(), Box<dyn std::error::Error>> {
                     std::fs::create_dir_all(preferences.path.parent().unwrap())?;
@@ -132,6 +140,35 @@ impl Preferences {
         let browsing = adw::PreferencesGroup::builder().title("Sidebar").build();
         browsing.add(&folders);
         page.add(&browsing);
+        let external = adw::SwitchRow::builder()
+            .title("Sync files deleted outside Hematite")
+            .subtitle("Remove remote copies when files are deleted in another app. A missing vault is always downloaded again.")
+            .active(sync_external_deletions()).build();
+        external.connect_active_notify({
+            let preferences = self.clone();
+            move |row| {
+                let mut settings = load();
+                settings.sync_external_deletions = row.is_active();
+                let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                    std::fs::create_dir_all(preferences.path.parent().unwrap())?;
+                    let temporary = preferences.path.with_extension("json.tmp");
+                    std::fs::write(&temporary, serde_json::to_vec(&settings)?)?;
+                    std::fs::rename(temporary, &preferences.path)?;
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    preferences
+                        .editor
+                        .toasts
+                        .add_toast(adw::Toast::new(&format!(
+                            "Could not save preferences: {error}"
+                        )));
+                }
+            }
+        });
+        let sync = adw::PreferencesGroup::builder().title("Sync").build();
+        sync.add(&external);
+        page.add(&sync);
         dialog.add(&page);
         dialog.present(Some(&self.editor.window));
     }
@@ -207,6 +244,7 @@ mod tests {
     fn folders_expand_by_default_including_older_settings() {
         assert!(Settings::default().folders_start_expanded);
         assert!(Settings::default().autosave);
+        assert!(!Settings::default().sync_external_deletions);
         let old: Settings = serde_json::from_str(r#"{"autosave":true}"#).unwrap();
         assert!(old.autosave && old.folders_start_expanded);
         let settings: Settings =
