@@ -51,8 +51,12 @@ To open another vault:
 cargo run --locked -- --vault /path/to/vault
 ```
 
-A desktop launcher template is provided in
-[data/io.github.hematite.Editor.desktop](data/io.github.hematite.Editor.desktop).
+To build and install Hematite for your user, with its desktop entry and icon
+(the binary goes to `~/.local/bin`; set `PREFIX` to change that):
+
+```sh
+./install.sh
+```
 
 Preferences are stored in GSettings/dconf under `/io/github/hematite/Editor/`.
 
