@@ -29,6 +29,14 @@ fn checkbox_layout(view: &View, checked: bool) -> gtk::pango::Layout {
     layout
 }
 
+fn bullet_layout(view: &View) -> gtk::pango::Layout {
+    let layout = view.create_pango_layout(Some("•"));
+    let attributes = gtk::pango::AttrList::new();
+    attributes.insert(gtk::pango::AttrFloat::new_scale(1.2));
+    layout.set_attributes(Some(&attributes));
+    layout
+}
+
 pub struct TablePreview {
     offset: i32,
     end: i32,
@@ -95,12 +103,14 @@ mod imp {
                 return;
             }
             let view = self.obj();
-            let layout = view.create_pango_layout(Some("•"));
+            let layout = bullet_layout(&view);
+            let (_, height) = layout.pixel_size();
             let color = view.color();
             for &offset in self.bullets.borrow().iter() {
                 let rect = marker_rect(&view, offset, 1);
+                let y = rect.y() + (rect.height() - height) / 2;
                 snapshot.save();
-                snapshot.translate(&gtk::graphene::Point::new(rect.x() as f32, rect.y() as f32));
+                snapshot.translate(&gtk::graphene::Point::new(rect.x() as f32, y as f32));
                 snapshot.append_layout(&layout, &color);
                 snapshot.restore();
             }
@@ -437,7 +447,7 @@ impl Renderer {
                     .is_some_and(|range| range.contains(position))
             })
             .collect();
-        let (bullet_ink, _) = self.view.create_pango_layout(Some("•")).pixel_extents();
+        let (bullet_ink, _) = bullet_layout(&self.view).pixel_extents();
         self.tags[4].set_letter_spacing(
             (bullet_ink.x() + bullet_ink.width()) * gtk::pango::SCALE,
         );
@@ -467,6 +477,29 @@ impl Renderer {
             apply(&self.tags[9], position + 5..position + 6);
         }
         *self.view.imp().tasks.borrow_mut() = tasks;
+        // Hang wrapped lines of a list item under its text rather than its
+        // marker. Measure the rendered prefix so concealment and zoom count.
+        let mut hanging = std::collections::HashMap::new();
+        for item in &document.items {
+            let start = buffer.iter_at_offset(item.start);
+            let width = self.view.iter_location(&buffer.iter_at_offset(item.end)).x()
+                - self.view.iter_location(&start).x();
+            if width <= 0 {
+                continue;
+            }
+            let tag = hanging.entry(width).or_insert_with(|| {
+                let tag = gtk::TextTag::builder()
+                    .left_margin(self.view.left_margin() + width)
+                    .indent(-width)
+                    .build();
+                buffer.tag_table().add(&tag);
+                self.image_tags.borrow_mut().push(tag.clone());
+                tag
+            });
+            let mut end = start;
+            end.forward_to_line_end();
+            apply(tag, item.start..end.offset());
+        }
         self.view.queue_draw();
         self.busy.set(false);
     }
@@ -977,7 +1010,10 @@ pub async fn hover_smoke(editor: crate::Editor) {
     let path = editor.root.join("hover.md");
     std::fs::write(
         &path,
-        "Intro\n\n**1. what is time? implications:**\n\n- First bullet\n- Second bullet\n\nEnd",
+        format!(
+            "Intro\n\n**1. what is time? implications:**\n\n- First bullet\n- Second bullet\n- Long {}\n\nEnd",
+            "word ".repeat(200)
+        ),
     )
     .unwrap();
     if let Some(source) = std::env::var_os("HEMATITE_HOVER_FIXTURE") {
@@ -993,6 +1029,15 @@ pub async fn hover_smoke(editor: crate::Editor) {
         assert_eq!(overlay.y(), text.y(), "Bullet must align with its text");
         assert_eq!(overlay.height(), text.height());
     }
+    let long = editor.text().find("- Long").unwrap() as i32;
+    let content = view.iter_location(&editor.buffer.iter_at_offset(long + 2));
+    let mut wrapped = editor.buffer.iter_at_offset(long);
+    assert!(view.forward_display_line(&mut wrapped), "Long bullet must wrap");
+    assert_eq!(
+        view.iter_location(&wrapped).x(),
+        content.x(),
+        "Wrapped bullet text must align with its first line"
+    );
     let controllers = view.observe_controllers();
     let motion = (0..controllers.n_items())
         .filter_map(|i| {

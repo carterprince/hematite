@@ -41,6 +41,9 @@ pub struct Document {
     pub styles: Vec<Styled>,
     pub markers: Vec<Range<i32>>,
     pub bullets: Vec<i32>,
+    /// Each list item's first-line prefix: line start through the marker and
+    /// the whitespace after it, where wrapped lines should hang.
+    pub items: Vec<Range<i32>>,
     pub tasks: Vec<(i32, bool)>,
     pub links: Vec<Link>,
     pub images: Vec<(Range<i32>, String)>,
@@ -189,6 +192,27 @@ pub fn parse(text: &str) -> Document {
                 let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
                 let marker = range.start + indent;
                 let rest = &line[indent..];
+                let line_start = text[..marker].rfind('\n').map_or(0, |i| i + 1);
+                let mut prefix = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+                prefix += match rest.as_bytes().get(prefix) {
+                    Some(b'.' | b')') if prefix > 0 => 1,
+                    Some(b'-' | b'*' | b'+') if prefix == 0 => 1,
+                    _ => 0,
+                };
+                if rest[prefix..].starts_with([' ', '\t']) {
+                    let mut content = &rest[prefix..];
+                    content = content.trim_start_matches([' ', '\t']);
+                    if let Some(task) = ["[ ]", "[x]", "[X]"]
+                        .iter()
+                        .find_map(|task| content.strip_prefix(task))
+                        .filter(|after| after.starts_with([' ', '\t']))
+                    {
+                        content = task.trim_start_matches([' ', '\t']);
+                    }
+                    document
+                        .items
+                        .push(offset(line_start)..offset(marker + rest.len() - content.len()));
+                }
                 if ["- ", "-\t", "* ", "*\t"]
                     .iter()
                     .any(|marker| rest.starts_with(marker))
@@ -340,6 +364,22 @@ mod tests {
         assert_eq!(document.bullets.len(), 1);
         assert!(rendered(text, &document).starts_with(" item\n done\n lowercase\n normal"));
         assert!(rendered(text, &document).contains("- [ ] code"));
+    }
+    #[test]
+    fn list_item_prefixes_cover_markers_and_indent() {
+        let text = "- one\n  - two\n1. three\n10) four\n- [ ] task\n-no\n";
+        let doc = parse(text);
+        let prefixes: Vec<String> = doc
+            .items
+            .iter()
+            .map(|range| {
+                text.chars()
+                    .skip(range.start as usize)
+                    .take((range.end - range.start) as usize)
+                    .collect()
+            })
+            .collect();
+        assert_eq!(prefixes, ["- ", "  - ", "1. ", "10) ", "- [ ] "]);
     }
     #[test]
     fn headings_and_star_bullets_preserve_source_offsets() {
