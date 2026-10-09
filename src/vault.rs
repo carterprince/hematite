@@ -64,6 +64,16 @@ pub fn entries(root: &Path) -> io::Result<Vec<Entry>> {
     Ok(files)
 }
 
+/// The note modified most recently, anywhere in the vault.
+pub fn most_recent_note(entries: &[Entry]) -> Option<PathBuf> {
+    entries
+        .iter()
+        .filter(|entry| !entry.directory)
+        .filter_map(|entry| Some((entry.path.metadata().ok()?.modified().ok()?, &entry.path)))
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path.clone())
+}
+
 // Refuse to overwrite a note changed by another application since it was opened.
 pub fn save(path: &Path, original: &str, text: &str) -> io::Result<()> {
     if fs::read_to_string(path)? != original {
@@ -142,6 +152,15 @@ mod tests {
                     .into_owned()
             })
             .collect();
+        // The newest note overall can be inside a folder that sorts later.
+        File::open(root.join("folder/old.md"))
+            .unwrap()
+            .set_times(FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(40)))
+            .unwrap();
+        assert_eq!(
+            most_recent_note(&entries(&root).unwrap()),
+            Some(root.join("folder/old.md"))
+        );
         assert_eq!(
             ordered,
             [

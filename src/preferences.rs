@@ -32,6 +32,9 @@ thread_local! {
 fn settings() -> gio::Settings {
     SETTINGS.with(Clone::clone)
 }
+pub(super) fn open_recent_note() -> bool {
+    settings().boolean("open-recent-note")
+}
 pub(super) fn folders_start_expanded() -> bool {
     settings().boolean("folders-start-expanded")
 }
@@ -174,6 +177,13 @@ impl Preferences {
             .build();
         self.settings.bind("autosave", &autosave, "active").build();
         group.add(&autosave);
+        let recent = adw::SwitchRow::builder()
+            .title("Open to most recently modified note")
+            .subtitle("Show the newest note when Hematite starts")
+            .active(open_recent_note())
+            .build();
+        self.settings.bind("open-recent-note", &recent, "active").build();
+        group.add(&recent);
         page.add(&group);
         let folders = adw::SwitchRow::builder()
             .title("Folders start expanded")
@@ -275,6 +285,7 @@ mod tests {
         let settings = gio::Settings::new_full(&schema, Some(&backend), None);
         assert!(settings.boolean("autosave"));
         assert!(settings.boolean("folders-start-expanded"));
+        assert!(settings.boolean("open-recent-note"));
         assert!(!settings.boolean("sync-external-deletions"));
         assert!(settings.string("vault-directory").is_empty());
         settings

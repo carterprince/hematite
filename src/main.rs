@@ -1049,6 +1049,12 @@ fn build(app: &adw::Application, root: PathBuf) {
     });
     window.present();
     populate();
+    // Smoke tests expect to start with no note open.
+    if std::env::var_os("HEMATITE_SMOKE_TEST").is_none() && preferences::open_recent_note() {
+        if let Some(path) = vault::most_recent_note(&tree.borrow().entries) {
+            editor.open(&path);
+        }
+    }
 
     if std::env::var_os("HEMATITE_SMOKE_TEST").is_some()
         && std::env::var_os("HEMATITE_HOVER_SMOKE_TEST").is_some()
