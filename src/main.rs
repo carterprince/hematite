@@ -1289,9 +1289,16 @@ fn main() -> glib::ExitCode {
             std::process::exit(101);
         }));
     }
+    // One instance per user, so launching again raises the open window. Smoke
+    // tests and --vault runs stay separate so they never reuse the main window.
+    let separate = !args.is_empty() || std::env::var_os("HEMATITE_SMOKE_TEST").is_some();
     let app = adw::Application::builder()
         .application_id("io.github.hematite.Editor")
-        .flags(gio::ApplicationFlags::NON_UNIQUE)
+        .flags(if separate {
+            gio::ApplicationFlags::NON_UNIQUE
+        } else {
+            gio::ApplicationFlags::empty()
+        })
         .build();
     gio::resources_register_include!("hematite.gresource")
         .expect("Could not register the app icon");
@@ -1307,6 +1314,12 @@ fn main() -> glib::ExitCode {
         }
         gtk::Window::set_default_icon_name("io.github.hematite.Editor");
     });
-    app.connect_activate(move |app| build(app, root.clone()));
+    app.connect_activate(move |app| {
+        if let Some(window) = app.active_window() {
+            window.present();
+            return;
+        }
+        build(app, root.clone());
+    });
     app.run_with_args::<&str>(&[])
 }
