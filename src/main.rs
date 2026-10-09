@@ -1009,6 +1009,8 @@ fn build(app: &adw::Application, root: PathBuf) {
     });
     window.add_action(&save_action);
     app.set_accels_for_action("win.save", &["<Control>s"]);
+    // GTK's built-in window.close goes through the close request, so unsaved edits still prompt.
+    app.set_accels_for_action("window.close", &["<Control>w"]);
     let search_action = gio::SimpleAction::new("search", None);
     search_action.connect_activate({
         let search = search.clone();

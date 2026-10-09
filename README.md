@@ -85,6 +85,7 @@ works through the lock-based method.
 | Shortcut | Action |
 | --- | --- |
 | Ctrl+N | New note |
+| Ctrl+W | Close Hematite |
 | Ctrl+F | Search notes |
 | Ctrl+S | Save |
 | Ctrl+plus / Ctrl+minus | Increase / decrease editor text size |
