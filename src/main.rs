@@ -1315,6 +1315,16 @@ fn main() -> glib::ExitCode {
             }
         }
         gtk::Window::set_default_icon_name("io.github.hematite.Editor");
+        // Automatic font rendering clips the top row of flat-topped capitals.
+        if let Some(settings) = gtk::Settings::default() {
+            let manual = settings
+                .find_property("gtk-font-rendering")
+                .and_then(|pspec| glib::EnumClass::with_type(pspec.value_type()))
+                .and_then(|class| class.to_value_by_nick("manual"));
+            if let Some(manual) = manual {
+                settings.set_property_from_value("gtk-font-rendering", &manual);
+            }
+        }
     });
     app.connect_activate(move |app| {
         if let Some(window) = app.active_window() {
