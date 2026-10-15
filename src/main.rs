@@ -550,8 +550,22 @@ fn build(app: &adw::Application, root: PathBuf) {
     create_dropdown.set_tooltip_text(Some("Create a note or folder"));
     create_dropdown.set_menu_model(Some(&create_menu));
     create_buttons.append(&create_dropdown);
-    header.pack_start(&create_buttons);
-    header.pack_start(&refresh);
+    let sidebar_toggle = gtk::ToggleButton::new();
+    sidebar_toggle.set_icon_name("sidebar-show-symbolic");
+    sidebar_toggle.set_tooltip_text(Some("Toggle sidebar (F9)"));
+    sidebar_toggle.set_active(true);
+    sidebar_toggle.set_halign(gtk::Align::End);
+    sidebar_toggle.set_hexpand(true);
+    // The sidebar buttons share one box so the toggle can sit on the sidebar's
+    // edge; collapsing hides everything but the toggle.
+    let sidebar_tools = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    sidebar_tools.append(&create_buttons);
+    sidebar_tools.append(&refresh);
+    sidebar_tools.append(&sidebar_toggle);
+    let sidebar_divider = gtk::Separator::new(gtk::Orientation::Vertical);
+    sidebar_divider.add_css_class("sidebar-divider");
+    sidebar_tools.append(&sidebar_divider);
+    header.pack_start(&sidebar_tools);
     let title = adw::WindowTitle::new("Hematite", "Select a note to begin");
     header.set_title_widget(Some(&title));
     let buffer = gtk::TextBuffer::builder().enable_undo(true).build();
@@ -593,6 +607,52 @@ fn build(app: &adw::Application, root: PathBuf) {
     split.set_shrink_start_child(false);
     split.set_shrink_end_child(false);
     split.set_vexpand(true);
+    let align_sidebar_tools = {
+        let split = split.clone();
+        let sidebar_tools = sidebar_tools.clone();
+        let sidebar_toggle = sidebar_toggle.clone();
+        move || {
+            if !split.start_child().is_some_and(|child| child.is_visible()) {
+                sidebar_toggle.set_margin_end(0);
+                sidebar_tools.set_size_request(-1, -1);
+                return;
+            }
+            // Run the divider along the sidebar's edge and give the toggle the
+            // same gap to it that the header leaves on the left.
+            let Some(origin) = sidebar_tools.compute_point(&split, &gtk::graphene::Point::zero())
+            else {
+                return;
+            };
+            let inset = origin.x().round() as i32;
+            sidebar_toggle.set_margin_end((inset - sidebar_tools.spacing()).max(0));
+            sidebar_tools.set_size_request((split.position() + 1 - inset).max(-1), -1);
+        }
+    };
+    split.connect_position_notify({
+        let align = align_sidebar_tools.clone();
+        move |_| align()
+    });
+    sidebar_tools.connect_map({
+        let align = align_sidebar_tools.clone();
+        move |_| {
+            glib::idle_add_local_once(align.clone());
+        }
+    });
+    sidebar_toggle.connect_toggled({
+        let sidebar = sidebar.clone();
+        let create_buttons = create_buttons.clone();
+        let refresh = refresh.clone();
+        let sidebar_divider = sidebar_divider.clone();
+        let align = align_sidebar_tools.clone();
+        move |toggle| {
+            let shown = toggle.is_active();
+            sidebar.set_visible(shown);
+            create_buttons.set_visible(shown);
+            refresh.set_visible(shown);
+            sidebar_divider.set_visible(shown);
+            align();
+        }
+    });
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
     layout.append(&header);
     layout.append(&split);
@@ -1021,6 +1081,23 @@ fn build(app: &adw::Application, root: PathBuf) {
     });
     window.add_action(&search_action);
     app.set_accels_for_action("win.search", &["<Control>f"]);
+    let toggle_sidebar = gio::SimpleAction::new("toggle-sidebar", None);
+    toggle_sidebar.connect_activate({
+        let sidebar_toggle = sidebar_toggle.clone();
+        move |_, _| sidebar_toggle.set_active(!sidebar_toggle.is_active())
+    });
+    window.add_action(&toggle_sidebar);
+    app.set_accels_for_action("win.toggle-sidebar", &["F9"]);
+    // Searching and creating notes happen in the sidebar, so bring it back first.
+    for name in ["search", "new-note", "new-folder", "new-note-here"] {
+        if let Some(action) = window.lookup_action(name) {
+            let sidebar_toggle = sidebar_toggle.clone();
+            action
+                .downcast::<gio::SimpleAction>()
+                .expect("Window actions are SimpleActions")
+                .connect_activate(move |_, _| sidebar_toggle.set_active(true));
+        }
+    }
     for (name, marker, accelerator) in [("bold", "**", "<Control>b"), ("italic", "*", "<Control>i")]
     {
         let action = gio::SimpleAction::new(name, None);

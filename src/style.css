@@ -8,3 +8,5 @@
 .search-preview { font-size: 12px; opacity: 0.65; }
 .editor { font-family: monospace; font-size: 16px; }
 .editor-status { font-size: 12px; opacity: 0.65; padding: 8px 18px; }
+/* Stretch past the header's padding so it meets the sidebar's edge below. */
+.sidebar-divider { min-height: 12px; margin: -6px 0; }
