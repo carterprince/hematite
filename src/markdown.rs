@@ -488,10 +488,8 @@ impl Renderer {
                 continue;
             }
             let tag = hanging.entry(width).or_insert_with(|| {
-                let tag = gtk::TextTag::builder()
-                    .left_margin(self.view.left_margin() + width)
-                    .indent(-width)
-                    .build();
+                // Pango keeps the first line at the margin and indents the rest.
+                let tag = gtk::TextTag::builder().indent(-width).build();
                 buffer.tag_table().add(&tag);
                 self.image_tags.borrow_mut().push(tag.clone());
                 tag
@@ -1031,6 +1029,11 @@ pub async fn hover_smoke(editor: crate::Editor) {
     }
     let long = editor.text().find("- Long").unwrap() as i32;
     let content = view.iter_location(&editor.buffer.iter_at_offset(long + 2));
+    assert_eq!(
+        view.iter_location(&editor.buffer.iter_at_offset(long)).x(),
+        view.iter_location(&editor.buffer.start_iter()).x(),
+        "Hanging indent must not move a list item's first line"
+    );
     let mut wrapped = editor.buffer.iter_at_offset(long);
     assert!(view.forward_display_line(&mut wrapped), "Long bullet must wrap");
     assert_eq!(
