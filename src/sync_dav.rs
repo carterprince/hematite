@@ -144,8 +144,13 @@ impl Dav {
                     "--disable",
                     "--silent",
                     "--show-error",
+                    // Some routes drop a share of new connections, so fail fast
+                    // and retry rather than abort the whole sync.
                     "--connect-timeout",
-                    "10",
+                    "5",
+                    "--retry",
+                    "4",
+                    "--retry-all-errors",
                     "--max-time",
                     "60",
                     "--max-filesize",
